@@ -11,7 +11,7 @@ const io = socketIo(server, {
   cors: {
     origin: [
       "http://localhost:3000",
-      "https://*.vercel.app", // Allows any Vercel subdomain
+      "https://playrobbery.vercel.app", // Allows any Vercel subdomain
       // You can update this with your specific domain after deployment:
       // "https://your-project-name.vercel.app"
     ],
@@ -23,7 +23,7 @@ const io = socketIo(server, {
 app.use(cors({
   origin: [
     "http://localhost:3000",
-    "https://*.vercel.app"
+    "https://playrobbery.vercel.app"
   ],
   credentials: true
 }));
