@@ -41,7 +41,7 @@ const ROBBERY = () => {
     const newSocket = io(
       process.env.REACT_APP_SOCKET_URL || 
       (process.env.NODE_ENV === 'production' 
-        ? 'https://robbery.onrender.com'  // Use your actual Render URL
+        ? 'https://robbery.onrender.com'  // Updated with your correct Render URL
         : 'http://localhost:3001'),
       {
         transports: ['websocket', 'polling'],
@@ -229,7 +229,9 @@ const ROBBERY = () => {
         document.removeEventListener('keydown', handleKeyDown);
       };
     }
-  }, [gameState, currentPlayer, players, playerId, playerName, isValidatingWord, socket, currentWord, submitWord]);
+  }, [gameState, currentPlayer, players, playerId, playerName, isValidatingWord, socket, currentWord]); // Removed submitWord from dependencies
+
+  // IMPROVED: Audio initialization with user interaction handling
 
   // IMPROVED: Audio initialization with user interaction handling
   const initializeAudio = () => {
