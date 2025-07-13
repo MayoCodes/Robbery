@@ -440,6 +440,7 @@ function nextTurn(partyCode) {
   if (game.turnsThisRound >= game.playersAliveAtRoundStart) {
     console.log(`Round ${game.round} complete! Processing round end...`);
     
+    // ROUND END PROCESSING
     // Find player(s) with lowest score among alive players
     const alivePlayersWithScores = alivePlayers.map(p => ({ 
       player: p, 
@@ -468,18 +469,21 @@ function nextTurn(partyCode) {
       });
     });
     
+    // Send updated game state after life deductions
+    io.to(partyCode).emit('gameStateUpdate', game);
+    
     // Announce round results
     if (lowestScorers.length === 1) {
       io.to(partyCode).emit('chatMessage', {
         type: 'system',
-        message: `💀 ${lowestScorers[0].player.name} had the lowest score (${lowestScore}) and loses a life!`,
+        message: `💀 Round ${game.round} complete! ${lowestScorers[0].player.name} had the lowest score (${lowestScore}) and loses a life!`,
         timestamp: Date.now()
       });
     } else {
       const names = lowestScorers.map(p => p.player.name).join(', ');
       io.to(partyCode).emit('chatMessage', {
         type: 'system',
-        message: `💀 ${names} tied for lowest score (${lowestScore}) and each lose a life!`,
+        message: `💀 Round ${game.round} complete! ${names} tied for lowest score (${lowestScore}) and each lose a life!`,
         timestamp: Date.now()
       });
     }
@@ -497,57 +501,79 @@ function nextTurn(partyCode) {
       return;
     }
     
-    // Start new round
-    game.round++;
-    game.turnsThisRound = 0;
-    game.playersAliveAtRoundStart = remainingAlivePlayers.length;
-    
-    // Announce new round after a delay
+    // START NEW ROUND
     setTimeout(() => {
+      game.round++; // Increment round number
+      game.turnsThisRound = 0; // Reset turn counter
+      game.playersAliveAtRoundStart = remainingAlivePlayers.length; // Update alive count
+      game.target = getRandomTarget(); // New target for new round
+      
+      console.log(`Starting Round ${game.round} with ${game.playersAliveAtRoundStart} players`);
+      
+      // Send updated game state with new round number
+      io.to(partyCode).emit('gameStateUpdate', game);
+      
+      // Announce new round
       io.to(partyCode).emit('chatMessage', {
         type: 'success',
-        message: `🎯 Round ${game.round} begins! New target coming up...`,
+        message: `🎯 Round ${game.round} begins! Target: ${game.target}`,
         timestamp: Date.now()
       });
-    }, 1500);
+      
+      // Continue with next player
+      proceedWithNextPlayer();
+      
+    }, 2500); // Delay to allow elimination animations to play
+    
+    return; // Exit here to wait for the timeout
   }
-
-  // Find next alive player
-  let attempts = 0;
-  let nextPlayer = (game.currentPlayer + 1) % game.players.length;
   
-  // Safety check to prevent infinite loop
-  while (game.players[nextPlayer].lives <= 0 && attempts < game.players.length) {
-    nextPlayer = (nextPlayer + 1) % game.players.length;
-    attempts++;
-  }
+  // If round is NOT complete, just proceed to next player
+  proceedWithNextPlayer();
+  
+  function proceedWithNextPlayer() {
+    // Find next alive player
+    let attempts = 0;
+    let nextPlayer = (game.currentPlayer + 1) % game.players.length;
+    
+    // Safety check to prevent infinite loop
+    while (game.players[nextPlayer].lives <= 0 && attempts < game.players.length) {
+      nextPlayer = (nextPlayer + 1) % game.players.length;
+      attempts++;
+    }
 
-  // If we couldn't find an alive player, end the game
-  if (attempts >= game.players.length || game.players[nextPlayer].lives <= 0) {
-    console.log('Could not find alive player, ending game');
-    game.gameState = 'finished';
+    // If we couldn't find an alive player, end the game
+    if (attempts >= game.players.length || game.players[nextPlayer].lives <= 0) {
+      console.log('Could not find alive player, ending game');
+      game.gameState = 'finished';
+      io.to(partyCode).emit('gameStateUpdate', game);
+      return;
+    }
+
+    game.currentPlayer = nextPlayer;
+    
+    // Only set new target if we're not in a new round (new round already set target)
+    if (game.turnsThisRound > 0) {
+      game.target = getRandomTarget();
+    }
+    
+    game.timeLeft = game.maxTime;
+
+    // Clear all typing states for new turn
+    game.players.forEach(player => {
+      player.currentlyTyping = '';
+    });
+
+    console.log(`Next player: ${game.players[nextPlayer].name}, target: ${game.target}, round: ${game.round}, turn: ${game.turnsThisRound}/${game.playersAliveAtRoundStart}`);
+
     io.to(partyCode).emit('gameStateUpdate', game);
-    return;
-  }
-
-  game.currentPlayer = nextPlayer;
-  game.target = getRandomTarget();
-  game.timeLeft = game.maxTime;
-
-  // Clear all typing states for new turn
-  game.players.forEach(player => {
-    player.currentlyTyping = '';
-  });
-
-  console.log(`Next player: ${game.players[nextPlayer].name}, target: ${game.target}, round: ${game.round}, turn: ${game.turnsThisRound}/${game.playersAliveAtRoundStart}`);
-
-  io.to(partyCode).emit('gameStateUpdate', game);
-  
-  // Handle bot turn
-  if (game.players[nextPlayer].isBot) {
-    handleBotTurn(partyCode);
-  } else {
-    startGameTimer(partyCode);
+    
+    // Handle bot turn
+    if (game.players[nextPlayer].isBot) {
+      handleBotTurn(partyCode);
+    } else {
+      startGameTimer(partyCode);
+    }
   }
 }
 
