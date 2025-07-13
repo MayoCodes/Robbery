@@ -175,61 +175,62 @@ const ROBBERY = () => {
     };
   }, []);
 
-  // Auto-capture typing when it's your turn
+  // Simple auto-capture typing when it's your turn
   useEffect(() => {
-    if (gameState === 'playing') {
-      const handleKeyDown = (e) => {
-        const currentPlayerData = players[currentPlayer];
-        const isYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
-        
-        // Only capture if it's your turn and not validating
-        if (!isYourTurn || isValidatingWord) return;
-        
-        // Don't capture if user is typing in chat or another input
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-        
-        // Handle different key types
-        if (/^[a-zA-Z]$/.test(e.key)) {
-          // Letter keys - add to word
-          e.preventDefault();
-          const newWord = currentWord + e.key.toLowerCase();
-          setCurrentWord(newWord);
-          
-          // Focus input and emit typing update
-          if (inputRef.current) {
-            inputRef.current.focus();
-          }
-          if (socket) {
-            socket.emit('typingUpdate', { word: newWord });
-          }
-        } else if (e.key === 'Backspace' && currentWord.length > 0) {
-          // Backspace - remove last character
-          e.preventDefault();
-          const newWord = currentWord.slice(0, -1);
-          setCurrentWord(newWord);
-          
-          if (inputRef.current) {
-            inputRef.current.focus();
-          }
-          if (socket) {
-            socket.emit('typingUpdate', { word: newWord });
-          }
-        } else if (e.key === 'Enter' && currentWord.trim()) {
-          // Enter - submit word
-          e.preventDefault();
-          submitWord(currentWord.trim());
-        }
-      };
+    if (gameState !== 'playing') return;
 
-      // Add event listener to document
-      document.addEventListener('keydown', handleKeyDown);
+    const handleKeyDown = (e) => {
+      const currentPlayerData = players[currentPlayer];
+      const isYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
       
-      // Cleanup
-      return () => {
-        document.removeEventListener('keydown', handleKeyDown);
-      };
-    }
-  }, [gameState, currentPlayer, players, playerId, playerName, isValidatingWord, socket, currentWord]); // Removed submitWord from dependencies
+      // Only capture if it's your turn and not validating
+      if (!isYourTurn || isValidatingWord) return;
+      
+      // Don't capture if user is typing in chat or another input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      
+      // Handle letter keys only
+      if (/^[a-zA-Z]$/.test(e.key)) {
+        e.preventDefault();
+        setCurrentWord(prev => {
+          const newWord = prev + e.key.toLowerCase();
+          // Emit typing update
+          if (socket) {
+            socket.emit('typingUpdate', { word: newWord });
+          }
+          return newWord;
+        });
+        
+        // Focus input
+        if (inputRef.current) {
+          inputRef.current.focus();
+        }
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        setCurrentWord(prev => {
+          if (prev.length > 0) {
+            const newWord = prev.slice(0, -1);
+            // Emit typing update
+            if (socket) {
+              socket.emit('typingUpdate', { word: newWord });
+            }
+            return newWord;
+          }
+          return prev;
+        });
+        
+        if (inputRef.current) {
+          inputRef.current.focus();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [gameState, currentPlayer, players, playerId, playerName, isValidatingWord, socket]);
 
   // IMPROVED: Audio initialization with user interaction handling
 
