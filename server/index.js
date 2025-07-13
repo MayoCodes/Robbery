@@ -104,7 +104,7 @@ io.on('connection', (socket) => {
       currentPlayer: 0,
       target: '',
       timeLeft: 15,
-      maxTime: 15,
+      maxTime: 15, // Default timer duration
       round: 1,
       usedWords: [], // Changed from Set to Array
       chatMessages: []
@@ -195,8 +195,35 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Remove bot
+  socket.on('removeBot', (botId) => {
+    const partyCode = playerSockets.get(socket.id);
+    const game = games.get(partyCode);
+    
+    if (!game || game.host !== socket.id) return;
+
+    game.players = game.players.filter(p => p.id !== botId);
+    io.to(partyCode).emit('gameStateUpdate', game);
+  });
+
+  // FIXED: Handle timer duration updates
+  socket.on('updateTimerDuration', (newMaxTime) => {
+    const partyCode = playerSockets.get(socket.id);
+    const game = games.get(partyCode);
+    
+    if (!game || game.host !== socket.id) return;
+
+    // Update the game's max time
+    game.maxTime = newMaxTime;
+    
+    // Broadcast to all players in the party
+    io.to(partyCode).emit('timerDurationUpdate', newMaxTime);
+    
+    console.log(`Timer duration updated to ${newMaxTime} seconds for party ${partyCode}`);
+  });
+
   // Start game
-  socket.on('startGame', () => {
+  socket.on('startGame', ({ gameMode }) => {
     const partyCode = playerSockets.get(socket.id);
     const game = games.get(partyCode);
     
@@ -210,11 +237,12 @@ io.on('connection', (socket) => {
 
     // Reset ALL game state completely
     game.gameState = 'playing';
+    game.gameMode = gameMode; // Store the game mode
     game.target = getRandomTarget();
     game.currentPlayer = 0;
     game.usedWords = []; // Reset as empty array
     game.round = 1; // Reset round counter
-    game.timeLeft = game.maxTime; // Reset timer
+    game.timeLeft = game.maxTime; // Reset timer to current maxTime setting
     game.turnsThisRound = 0; // Track turns in current round
     game.playersAliveAtRoundStart = 0; // Track how many players started the round
     
@@ -315,19 +343,6 @@ io.on('connection', (socket) => {
     }, 1000);
   });
 
-  // NEW: Handle timer duration updates
-  socket.on('updateTimerDuration', (newMaxTime) => {
-    const partyCode = playerSockets.get(socket.id);
-    const game = games.get(partyCode);
-    
-    if (!game || game.host !== socket.id) return;
-
-    game.maxTime = newMaxTime;
-    
-    // Broadcast to all players
-    io.to(partyCode).emit('timerDurationUpdate', newMaxTime);
-  });
-
   // Chat message
   socket.on('chatMessage', (message) => {
     const partyCode = playerSockets.get(socket.id);
@@ -343,6 +358,46 @@ io.on('connection', (socket) => {
       playerName: player.name,
       timestamp: Date.now()
     });
+  });
+
+  // Leave party
+  socket.on('leaveParty', () => {
+    const partyCode = playerSockets.get(socket.id);
+    if (!partyCode) return;
+    
+    const game = games.get(partyCode);
+    if (!game) return;
+    
+    const disconnectedPlayer = game.players.find(p => p.id === socket.id);
+    
+    // Remove the player
+    game.players = game.players.filter(p => p.id !== socket.id);
+    playerSockets.delete(socket.id);
+    
+    // If no players left, delete game
+    if (game.players.length === 0) {
+      games.delete(partyCode);
+      return;
+    }
+    
+    // Transfer host if needed
+    if (game.host === socket.id) {
+      const newHost = game.players.find(p => !p.isBot);
+      if (newHost) {
+        game.host = newHost.id;
+        newHost.isHost = true;
+      }
+    }
+    
+    io.to(partyCode).emit('gameStateUpdate', game);
+    
+    if (disconnectedPlayer) {
+      io.to(partyCode).emit('chatMessage', {
+        type: 'system',
+        message: `${disconnectedPlayer.name} left the party`,
+        timestamp: Date.now()
+      });
+    }
   });
 
   // Disconnect - ULTRA SIMPLIFIED
@@ -640,7 +695,7 @@ function nextTurn(partyCode) {
       game.target = getRandomTarget();
     }
     
-    game.timeLeft = game.maxTime;
+    game.timeLeft = game.maxTime; // Use current maxTime setting
 
     // Clear all typing states for new turn
     game.players.forEach(player => {

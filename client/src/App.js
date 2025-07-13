@@ -68,6 +68,7 @@ const ROBBERY = () => {
       setPartyCode(code);
       setPlayers(state.players);
       setUsedWords(new Set(state.usedWords || []));
+      setMaxTime(state.maxTime || 15); // Set initial maxTime from server
       setIsHost(true);
       setGameState('lobby');
       addChatMessage('system', `Party ${code} created successfully`);
@@ -109,6 +110,12 @@ const ROBBERY = () => {
           ? { ...player, currentlyTyping: word }
           : player
       ));
+    });
+
+    // NEW: Timer duration updates
+    newSocket.on('timerDurationUpdate', (newMaxTime) => {
+      setMaxTime(newMaxTime);
+      console.log('Timer duration updated to:', newMaxTime);
     });
 
     // Powerup received
@@ -472,6 +479,14 @@ const ROBBERY = () => {
     if (!isHost || players.length < 2 || !socket) return;
     socket.emit('startGame', { gameMode });
     playSound('gamestart');
+  };
+
+  // Function to handle timer duration updates
+  const updateTimerDuration = (newMaxTime) => {
+    setMaxTime(newMaxTime);
+    if (isHost && socket) {
+      socket.emit('updateTimerDuration', newMaxTime);
+    }
   };
 
   // Word validation function
@@ -854,7 +869,15 @@ const ROBBERY = () => {
                       min="8" 
                       max="20" 
                       value={maxTime}
-                      onChange={(e) => setMaxTime(parseInt(e.target.value))}
+                      onChange={(e) => {
+                        const newMaxTime = parseInt(e.target.value);
+                        setMaxTime(newMaxTime);
+                        
+                        // If host, emit to server to sync with other players
+                        if (isHost && socket) {
+                          socket.emit('updateTimerDuration', newMaxTime);
+                        }
+                      }}
                       disabled={!isHost}
                       className="range-input"
                     />
