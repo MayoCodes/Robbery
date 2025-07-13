@@ -586,6 +586,18 @@ const ROBBERY = () => {
     setChatInput('');
   };
 
+  const goBackToLobby = () => {
+    // Reset local game state
+    setCurrentWord('');
+    setAttemptsLeft(5);
+    setWordValidationMessage('');
+    setIsValidatingWord(false);
+    setAvailablePowerups(0);
+    
+    // Go back to lobby
+    setGameState('lobby');
+  };
+
   const leaveParty = () => {
     if (socket) {
       socket.emit('leaveParty');
@@ -1303,7 +1315,7 @@ const ROBBERY = () => {
 
             <div className="game-over-actions">
               <button 
-                onClick={() => setGameState('lobby')}
+                onClick={goBackToLobby}
                 className="btn btn-primary"
               >
                 Play Again
