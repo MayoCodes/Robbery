@@ -11,9 +11,7 @@ const io = socketIo(server, {
   cors: {
     origin: [
       "http://localhost:3000",
-      "https://playrobbery.vercel.app", // Allows any Vercel subdomain
-      // You can update this with your specific domain after deployment:
-      // "https://your-project-name.vercel.app"
+      "https://playrobbery.vercel.app", // Your actual Vercel domain
     ],
     methods: ["GET", "POST"],
     credentials: true
@@ -58,8 +56,28 @@ function generatePartyCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
+// Updated with harder letter combinations
 function getRandomTarget() {
-  const targets = ['BL', 'ST', 'ER', 'ING', 'ED', 'LY', 'UN', 'RE', 'TH', 'CH'];
+  const targets = [
+    // Easy 2-letter combinations
+    'BL', 'ST', 'ER', 'TH', 'CH', 'SH', 'WH', 'LY', 'ED', 'UN', 'RE',
+    
+    // Medium 2-letter combinations  
+    'QU', 'PH', 'GH', 'CK', 'DG', 'NK', 'MP', 'NT', 'ND', 'NG', 'RD', 'LD', 'LT', 'PT', 'CT',
+    
+    // Hard 2-letter combinations
+    'ZE', 'ZI', 'ZA', 'ZO', 'YN', 'YM', 'YP', 'YT', 'XY', 'WR', 'PS', 'PN',
+    
+    // 3-letter combinations
+    'ING', 'ION', 'NDE', 'TLE', 'BLE', 'PLE', 'CLE', 'GLE', 'TCH', 'DGE', 'GHT', 'OUG',
+    
+    // Hard 3-letter combinations
+    'ESS', 'ENT', 'ANT', 'NCE', 'ATE', 'IVE', 'URE', 'ARD', 'ORD', 'IRD', 'AST', 'EST', 'IST',
+    
+    // Very hard 4+ letter combinations
+    'TION', 'SION', 'NESS', 'MENT', 'ABLE', 'IBLE', 'WARD', 'SHIP', 'HOOD', 'OUGH', 'IGHT'
+  ];
+  
   return targets[Math.floor(Math.random() * targets.length)];
 }
 
@@ -79,7 +97,8 @@ io.on('connection', (socket) => {
         score: 0,
         lives: 3,
         isHost: true,
-        isBot: false
+        isBot: false,
+        currentlyTyping: '' // Add typing state
       }],
       gameState: 'lobby',
       currentPlayer: 0,
@@ -112,7 +131,8 @@ io.on('connection', (socket) => {
       score: 0,
       lives: 3,
       isHost: false,
-      isBot: false
+      isBot: false,
+      currentlyTyping: '' // Add typing state
     };
 
     game.players.push(newPlayer);
@@ -125,6 +145,26 @@ io.on('connection', (socket) => {
       message: `${playerName} joined the game`,
       timestamp: Date.now()
     });
+  });
+
+  // NEW: Handle real-time typing updates
+  socket.on('typingUpdate', ({ word }) => {
+    const partyCode = playerSockets.get(socket.id);
+    const game = games.get(partyCode);
+    
+    if (!game) return;
+    
+    // Update the player's current typing
+    const player = game.players.find(p => p.id === socket.id);
+    if (player) {
+      player.currentlyTyping = word;
+      
+      // Broadcast to all players in the party
+      io.to(partyCode).emit('playerTypingUpdate', {
+        playerId: socket.id,
+        word: word
+      });
+    }
   });
 
   // Add bot
@@ -146,7 +186,8 @@ io.on('connection', (socket) => {
         score: 0,
         lives: 3,
         isHost: false,
-        isBot: true
+        isBot: true,
+        currentlyTyping: '' // Add typing state
       };
 
       game.players.push(newBot);
@@ -166,6 +207,11 @@ io.on('connection', (socket) => {
     game.currentPlayer = 0;
     game.usedWords = []; // Reset as empty array
     
+    // Clear all typing states when game starts
+    game.players.forEach(player => {
+      player.currentlyTyping = '';
+    });
+    
     io.to(partyCode).emit('gameStateUpdate', game);
     
     // Start timer
@@ -181,6 +227,13 @@ io.on('connection', (socket) => {
     
     const currentPlayerData = game.players[game.currentPlayer];
     if (currentPlayerData.id !== socket.id) return;
+
+    // Clear the player's typing state
+    currentPlayerData.currentlyTyping = '';
+    io.to(partyCode).emit('playerTypingUpdate', {
+      playerId: socket.id,
+      word: ''
+    });
 
     // Basic validation (target contains check already done on client)
     const isValid = word.length >= 3 && 
@@ -219,6 +272,13 @@ io.on('connection', (socket) => {
     
     const currentPlayerData = game.players[game.currentPlayer];
     if (currentPlayerData.id !== socket.id) return;
+
+    // Clear the player's typing state
+    currentPlayerData.currentlyTyping = '';
+    io.to(partyCode).emit('playerTypingUpdate', {
+      playerId: socket.id,
+      word: ''
+    });
 
     // Player loses a life for running out of attempts
     currentPlayerData.lives--;
@@ -295,6 +355,13 @@ function startGameTimer(partyCode) {
       const currentPlayer = game.players[game.currentPlayer];
       currentPlayer.lives--;
       
+      // Clear typing state
+      currentPlayer.currentlyTyping = '';
+      io.to(partyCode).emit('playerTypingUpdate', {
+        playerId: currentPlayer.id,
+        word: ''
+      });
+      
       io.to(partyCode).emit('playerEliminated', currentPlayer.id);
       
       setTimeout(() => {
@@ -335,6 +402,11 @@ function nextTurn(partyCode) {
   game.target = getRandomTarget();
   game.timeLeft = game.maxTime;
 
+  // Clear all typing states for new turn
+  game.players.forEach(player => {
+    player.currentlyTyping = '';
+  });
+
   io.to(partyCode).emit('gameStateUpdate', game);
   
   // Handle bot turn
@@ -350,14 +422,14 @@ function handleBotTurn(partyCode) {
   const bot = game.players[game.currentPlayer];
   
   setTimeout(() => {
-    const westernWords = ['horse', 'trail', 'dust', 'silver', 'sheriff', 'the', 'and', 'water'];
+    const westernWords = ['horse', 'trail', 'dust', 'silver', 'sheriff', 'the', 'and', 'water', 'ranger', 'bullet', 'outlaw', 'canyon', 'desert', 'saloon'];
     const validWords = westernWords.filter(word => 
-      word.includes(game.target.toLowerCase()) && !game.usedWords.includes(word) // Changed to use includes
+      word.includes(game.target.toLowerCase()) && !game.usedWords.includes(word)
     );
     
     if (validWords.length > 0 && Math.random() > 0.1) {
       const word = validWords[0];
-      game.usedWords.push(word); // Changed to push to array
+      game.usedWords.push(word);
       bot.score += word.length;
       
       io.to(partyCode).emit('chatMessage', {

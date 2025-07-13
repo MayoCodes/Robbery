@@ -39,15 +39,15 @@ const ROBBERY = () => {
   // Socket.IO connection
   useEffect(() => {
     const newSocket = io(
-  process.env.REACT_APP_SOCKET_URL || 
-  (process.env.NODE_ENV === 'production' 
-    ? 'https://your-server-name.onrender.com'  // You'll update this after Render deployment
-    : 'http://localhost:3001'),
-  {
-    transports: ['websocket', 'polling'],
-    timeout: 20000,
-  }
-);
+      process.env.REACT_APP_SOCKET_URL || 
+      (process.env.NODE_ENV === 'production' 
+        ? 'https://robbery-server-xqzx.onrender.com'  // Update with your actual Render URL
+        : 'http://localhost:3001'),
+      {
+        transports: ['websocket', 'polling'],
+        timeout: 20000,
+      }
+    );
     
     setSocket(newSocket);
     setPlayerId(newSocket.id);
@@ -97,6 +97,15 @@ const ROBBERY = () => {
       if (myPlayer) {
         setIsHost(myPlayer.isHost);
       }
+    });
+
+    // NEW: Handle real-time typing updates
+    newSocket.on('playerTypingUpdate', ({ playerId, word }) => {
+      setPlayers(prev => prev.map(player => 
+        player.id === playerId 
+          ? { ...player, currentlyTyping: word }
+          : player
+      ));
     });
 
     // Powerup received
@@ -163,53 +172,74 @@ const ROBBERY = () => {
     };
   }, []);
 
-  // Initialize simple Web Audio API
-  useEffect(() => {
-    if (soundEnabled && !audioInitialized) {
+  // IMPROVED: Audio initialization with user interaction handling
+  const initializeAudio = () => {
+    if (!audioInitialized && !audioContextRef.current) {
       try {
-        // Create audio context
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         audioContextRef.current = new AudioContext();
         setAudioInitialized(true);
+        console.log('Audio initialized successfully');
       } catch (error) {
         console.warn('Audio initialization failed:', error);
         setSoundEnabled(false);
       }
     }
+  };
+
+  // Handle first user interaction to initialize audio
+  useEffect(() => {
+    const handleFirstInteraction = () => {
+      if (soundEnabled && !audioInitialized) {
+        initializeAudio();
+        document.removeEventListener('click', handleFirstInteraction);
+        document.removeEventListener('keydown', handleFirstInteraction);
+      }
+    };
+
+    document.addEventListener('click', handleFirstInteraction);
+    document.addEventListener('keydown', handleFirstInteraction);
+
+    return () => {
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('keydown', handleFirstInteraction);
+    };
   }, [soundEnabled, audioInitialized]);
 
-  // Simple beep generator
+  // IMPROVED: Extract beep creation to separate function
+  const createBeepSound = (context, frequency, duration, volume, type) => {
+    const oscillator = context.createOscillator();
+    const gainNode = context.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(context.destination);
+    
+    oscillator.frequency.setValueAtTime(frequency, context.currentTime);
+    oscillator.type = type;
+    
+    gainNode.gain.setValueAtTime(0, context.currentTime);
+    gainNode.gain.linearRampToValueAtTime(volume, context.currentTime + 0.01);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, context.currentTime + duration);
+    
+    oscillator.start(context.currentTime);
+    oscillator.stop(context.currentTime + duration);
+  };
+
+  // IMPROVED: Better audio context handling
   const createBeep = (frequency, duration, volume = 0.1, type = 'sine') => {
     if (!audioContextRef.current || !soundEnabled) return;
     
     try {
       const context = audioContextRef.current;
       
-      // Resume context if suspended (browser requirement)
+      // Always try to resume context
       if (context.state === 'suspended') {
-        context.resume();
+        context.resume().then(() => {
+          createBeepSound(context, frequency, duration, volume, type);
+        });
+      } else {
+        createBeepSound(context, frequency, duration, volume, type);
       }
-      
-      const oscillator = context.createOscillator();
-      const gainNode = context.createGain();
-      
-      // Connect nodes
-      oscillator.connect(gainNode);
-      gainNode.connect(context.destination);
-      
-      // Configure oscillator
-      oscillator.frequency.setValueAtTime(frequency, context.currentTime);
-      oscillator.type = type;
-      
-      // Configure volume envelope
-      gainNode.gain.setValueAtTime(0, context.currentTime);
-      gainNode.gain.linearRampToValueAtTime(volume, context.currentTime + 0.01);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, context.currentTime + duration);
-      
-      // Play sound
-      oscillator.start(context.currentTime);
-      oscillator.stop(context.currentTime + duration);
-      
     } catch (error) {
       console.warn('Sound playback failed:', error);
     }
@@ -445,6 +475,17 @@ const ROBBERY = () => {
           setWordValidationMessage('');
         }, 3000);
       }
+    }
+  };
+
+  // NEW: Handle word input changes with typing broadcast
+  const handleWordChange = (e) => {
+    const word = e.target.value;
+    setCurrentWord(word);
+    
+    // Broadcast typing to other players
+    if (socket && isYourTurn) {
+      socket.emit('typingUpdate', { word });
     }
   };
 
@@ -909,6 +950,22 @@ const ROBBERY = () => {
                       {player.name.length > 8 ? player.name.substring(0, 8) + '...' : player.name}
                     </div>
                     
+                    {/* NEW: Show what they're typing */}
+                    {player.currentlyTyping && (
+                      <div className="player-typing" style={{
+                        fontSize: '0.7rem',
+                        color: '#fdba74',
+                        fontStyle: 'italic',
+                        marginTop: '2px',
+                        maxWidth: '60px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        "{player.currentlyTyping}"
+                      </div>
+                    )}
+                    
                     {/* Lives display */}
                     <div className="player-position-lives">
                       {[...Array(Math.max(0, player.lives))].map((_, i) => (
@@ -1056,7 +1113,7 @@ const ROBBERY = () => {
                   ref={inputRef}
                   type="text"
                   value={currentWord}
-                  onChange={(e) => setCurrentWord(e.target.value)}
+                  onChange={handleWordChange} // NEW: Use the new handler for typing updates
                   onKeyPress={(e) => {
                     if (e.key === 'Enter' && currentWord.trim() && gameState === 'playing' && isYourTurn && !isValidatingWord) {
                       submitWord(currentWord.trim());
