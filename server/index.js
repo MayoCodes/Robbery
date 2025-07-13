@@ -345,117 +345,123 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Disconnect - IMPROVED with better game state handling
+  // Disconnect - SIMPLIFIED and more reliable
   socket.on('disconnect', () => {
     console.log(`Player ${socket.id} disconnected`);
     
     const partyCode = playerSockets.get(socket.id);
-    if (partyCode) {
-      const game = games.get(partyCode);
-      if (game) {
-        const disconnectedPlayer = game.players.find(p => p.id === socket.id);
-        const wasCurrentPlayer = game.currentPlayer < game.players.length && 
-                                 game.players[game.currentPlayer]?.id === socket.id;
-        
-        console.log(`Disconnected player: ${disconnectedPlayer?.name}, was current: ${wasCurrentPlayer}`);
-        
-        // Remove the disconnected player
-        game.players = game.players.filter(p => p.id !== socket.id);
-        
-        // Update current player index if needed
-        if (wasCurrentPlayer && game.gameState === 'playing') {
-          // Clear any existing timer
-          if (game.timerId) {
-            clearInterval(game.timerId);
-            game.timerId = null;
-          }
-          
-          // Adjust current player index if necessary
-          if (game.currentPlayer >= game.players.length) {
-            game.currentPlayer = 0;
-          }
-          
-          // Check if we still have enough players to continue
-          const alivePlayers = game.players.filter(p => p.lives > 0);
-          if (alivePlayers.length <= 1) {
-            console.log('Not enough players after disconnect, ending game');
-            game.gameState = 'finished';
-            io.to(partyCode).emit('gameStateUpdate', game);
-          } else {
-            // Find next alive player
-            let attempts = 0;
-            while (game.players[game.currentPlayer]?.lives <= 0 && attempts < game.players.length) {
-              game.currentPlayer = (game.currentPlayer + 1) % game.players.length;
-              attempts++;
-            }
-            
-            // If we found a valid player, continue the game
-            if (attempts < game.players.length && game.players[game.currentPlayer]?.lives > 0) {
-              game.target = getRandomTarget();
-              game.timeLeft = game.maxTime;
-              
-              // Update turn tracking for rounds
-              if (game.playersAliveAtRoundStart) {
-                game.playersAliveAtRoundStart = alivePlayers.length;
-              }
-              
-              io.to(partyCode).emit('gameStateUpdate', game);
-              
-              io.to(partyCode).emit('chatMessage', {
-                type: 'system',
-                message: `${disconnectedPlayer?.name || 'Player'} disconnected. ${game.players[game.currentPlayer]?.name}'s turn!`,
-                timestamp: Date.now()
-              });
-              
-              // Handle bot turn or start timer
-              if (game.players[game.currentPlayer]?.isBot) {
-                handleBotTurn(partyCode);
-              } else {
-                startGameTimer(partyCode);
-              }
-            } else {
-              // Couldn't find valid player, end game
-              game.gameState = 'finished';
-              io.to(partyCode).emit('gameStateUpdate', game);
-            }
-          }
-        } else {
-          // Player wasn't current, just update the game state
-          // Update turn tracking if needed
-          if (game.gameState === 'playing' && game.playersAliveAtRoundStart) {
-            const alivePlayers = game.players.filter(p => p.lives > 0);
-            game.playersAliveAtRoundStart = alivePlayers.length;
-          }
+    if (!partyCode) return;
+    
+    const game = games.get(partyCode);
+    if (!game) return;
+    
+    const disconnectedPlayer = game.players.find(p => p.id === socket.id);
+    const wasCurrentPlayer = game.players[game.currentPlayer]?.id === socket.id;
+    
+    console.log(`Disconnected: ${disconnectedPlayer?.name}, was current: ${wasCurrentPlayer}, game state: ${game.gameState}`);
+    
+    // Remove the disconnected player
+    game.players = game.players.filter(p => p.id !== socket.id);
+    
+    // Clean up
+    playerSockets.delete(socket.id);
+    
+    // Handle empty game
+    if (game.players.length === 0) {
+      console.log('No players left, deleting game');
+      games.delete(partyCode);
+      return;
+    }
+    
+    // Transfer host if needed
+    if (game.host === socket.id) {
+      const newHost = game.players.find(p => !p.isBot);
+      if (newHost) {
+        game.host = newHost.id;
+        newHost.isHost = true;
+        console.log(`Host transferred to: ${newHost.name}`);
+      }
+    }
+    
+    // Handle game state based on current state
+    if (game.gameState === 'lobby') {
+      // Simple case - just update lobby
+      io.to(partyCode).emit('gameStateUpdate', game);
+      io.to(partyCode).emit('chatMessage', {
+        type: 'system',
+        message: `${disconnectedPlayer?.name || 'Player'} left the game`,
+        timestamp: Date.now()
+      });
+    } else if (game.gameState === 'playing') {
+      // Clear any running timer
+      if (game.timerId) {
+        clearInterval(game.timerId);
+        game.timerId = null;
+      }
+      
+      // Check if we have enough players to continue
+      const alivePlayers = game.players.filter(p => p.lives > 0);
+      if (alivePlayers.length <= 1) {
+        console.log('Not enough players after disconnect, ending game');
+        game.gameState = 'finished';
+        io.to(partyCode).emit('gameStateUpdate', game);
+        return;
+      }
+      
+      // Update round tracking
+      game.playersAliveAtRoundStart = alivePlayers.length;
+      
+      // If it was the current player's turn, find next player
+      if (wasCurrentPlayer) {
+        // Reset current player to 0 and find first alive player
+        game.currentPlayer = 0;
+        while (game.currentPlayer < game.players.length && game.players[game.currentPlayer].lives <= 0) {
+          game.currentPlayer++;
         }
         
-        // Handle empty game or host transfer
-        if (game.players.length === 0) {
-          console.log('No players left, deleting game');
-          games.delete(partyCode);
-        } else {
-          // Transfer host if needed
-          if (game.host === socket.id) {
-            const newHost = game.players.find(p => !p.isBot);
-            if (newHost) {
-              game.host = newHost.id;
-              newHost.isHost = true;
-              console.log(`Host transferred to: ${newHost.name}`);
-            }
-          }
-          
-          // Always emit updated game state
-          io.to(partyCode).emit('gameStateUpdate', game);
-          
-          if (disconnectedPlayer) {
-            io.to(partyCode).emit('chatMessage', {
-              type: 'system',
-              message: `${disconnectedPlayer.name} left the game`,
-              timestamp: Date.now()
-            });
-          }
+        // Safety check
+        if (game.currentPlayer >= game.players.length) {
+          game.currentPlayer = 0;
+        }
+        
+        // Set new turn
+        game.target = getRandomTarget();
+        game.timeLeft = game.maxTime;
+        
+        // Clear typing states
+        game.players.forEach(player => {
+          player.currentlyTyping = '';
+        });
+        
+        console.log(`New current player: ${game.players[game.currentPlayer]?.name}`);
+      } else {
+        // Adjust current player index if it's out of bounds
+        if (game.currentPlayer >= game.players.length) {
+          game.currentPlayer = 0;
         }
       }
-      playerSockets.delete(socket.id);
+      
+      // Send updated game state
+      io.to(partyCode).emit('gameStateUpdate', game);
+      
+      // Send chat message
+      io.to(partyCode).emit('chatMessage', {
+        type: 'system',
+        message: `${disconnectedPlayer?.name || 'Player'} disconnected. ${game.players[game.currentPlayer]?.name}'s turn!`,
+        timestamp: Date.now()
+      });
+      
+      // Continue game if it was current player's turn
+      if (wasCurrentPlayer) {
+        if (game.players[game.currentPlayer]?.isBot) {
+          handleBotTurn(partyCode);
+        } else {
+          startGameTimer(partyCode);
+        }
+      }
+    } else {
+      // Finished or other states - just update
+      io.to(partyCode).emit('gameStateUpdate', game);
     }
   });
 });
