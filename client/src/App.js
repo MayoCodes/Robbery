@@ -175,6 +175,21 @@ const ROBBERY = () => {
     };
   }, []);
 
+  // Auto-focus input when it becomes your turn
+  useEffect(() => {
+    if (gameState === 'playing') {
+      const currentPlayerData = players[currentPlayer];
+      const isYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
+      
+      if (isYourTurn && inputRef.current) {
+        // Small delay to ensure the input is rendered and ready
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 100);
+      }
+    }
+  }, [currentPlayer, gameState, players, playerId, playerName]);
+
   // IMPROVED: Audio initialization with user interaction handling
   const initializeAudio = () => {
     if (!audioInitialized && !audioContextRef.current) {
