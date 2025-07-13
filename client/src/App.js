@@ -41,7 +41,7 @@ const ROBBERY = () => {
     const newSocket = io(
       process.env.REACT_APP_SOCKET_URL || 
       (process.env.NODE_ENV === 'production' 
-        ? 'https://robbery.onrender.com'  // Use your actual Render URL
+        ? 'https://robbery-server-xqzx.onrender.com'  // Use your actual Render URL
         : 'http://localhost:3001'),
       {
         transports: ['websocket', 'polling'],
@@ -554,6 +554,14 @@ const ROBBERY = () => {
   if (gameState === 'welcome') {
     return (
       <div className="game-container">
+        {/* Add CSS animation for typing bubble */}
+        <style>{`
+          @keyframes typingPulse {
+            0% { opacity: 0.8; transform: translateX(-50%) scale(1); }
+            100% { opacity: 1; transform: translateX(-50%) scale(1.05); }
+          }
+        `}</style>
+        
         <div className="game-background-effects">
           <div className="bg-blob-1"></div>
           <div className="bg-blob-2"></div>
@@ -916,8 +924,8 @@ const ROBBERY = () => {
           </div>
 
           {/* Game Area */}
-          <div className="game-area">
-            <div className="game-circle">
+          <div className="game-area" style={{ padding: '4rem 2rem 2rem 2rem' }}>
+            <div className="game-circle" style={{ position: 'relative', overflow: 'visible' }}>
               {/* Central Target Area */}
               <div className={`target-area ${timeLeft <= 3 ? 'critical' : ''}`}>
                 <div className="target-text">{target}</div>
@@ -935,66 +943,91 @@ const ROBBERY = () => {
                 const isBeingShot = shootingAnimation === player.id;
                 
                 return (
-                  <div
-                    key={player.id}
-                    className={`player-position ${
-                      isActive ? 'active' : 
-                      player.lives <= 0 ? 'eliminated' :
-                      player.isBot ? 'bot' : 'human'
-                    } ${isBeingShot ? 'being-shot' : ''}`}
-                    style={{
-                      left: `calc(50% + ${x}px - 3rem)`,
-                      top: `calc(50% + ${y}px - 3rem)`
-                    }}
-                  >
-                    {/* Gun Icon */}
-                    <div className="player-gun">🔫</div>
-                    
-                    {/* Player avatar */}
-                    <div className={`player-position-avatar ${
-                      player.isBot ? 'bot' : 'human'
-                    } ${isBeingShot ? 'being-shot' : ''}`}>
-                      {player.isBot ? <Bot className="icon" /> : player.name.charAt(0)}
+                  <div key={player.id}>
+                    {/* Player Card */}
+                    <div
+                      className={`player-position ${
+                        isActive ? 'active' : 
+                        player.lives <= 0 ? 'eliminated' :
+                        player.isBot ? 'bot' : 'human'
+                      } ${isBeingShot ? 'being-shot' : ''}`}
+                      style={{
+                        left: `calc(50% + ${x}px - 3rem)`,
+                        top: `calc(50% + ${y}px - 3rem)`
+                      }}
+                    >
+                      {/* Gun Icon */}
+                      <div className="player-gun">🔫</div>
+                      
+                      {/* Player avatar */}
+                      <div className={`player-position-avatar ${
+                        player.isBot ? 'bot' : 'human'
+                      } ${isBeingShot ? 'being-shot' : ''}`}>
+                        {player.isBot ? <Bot className="icon" /> : player.name.charAt(0)}
+                      </div>
+                      
+                      {/* Player name */}
+                      <div className="player-position-name">
+                        {player.name.length > 8 ? player.name.substring(0, 8) + '...' : player.name}
+                      </div>
+                      
+                      {/* Lives display */}
+                      <div className="player-position-lives">
+                        {[...Array(Math.max(0, player.lives))].map((_, i) => (
+                          <div key={i} className={`life-dot-small ${isBeingShot ? 'being-shot' : ''}`}></div>
+                        ))}
+                        {[...Array(Math.max(0, 3 - player.lives))].map((_, i) => (
+                          <div key={`lost-${i}`} className="life-lost">×</div>
+                        ))}
+                      </div>
+                      
+                      {/* Score */}
+                      <div className="player-position-score">{player.score}</div>
                     </div>
-                    
-                    {/* Player name */}
-                    <div className="player-position-name">
-                      {player.name.length > 8 ? player.name.substring(0, 8) + '...' : player.name}
-                    </div>
-                    
-                    {/* NEW: Show what they're typing */}
+
+                    {/* NEW: Typing display positioned outside the player card */}
                     {player.currentlyTyping && (
-                      <div className="player-typing" style={{
-                        fontSize: '0.75rem',
-                        color: '#fbbf24',
-                        fontWeight: 'bold',
-                        fontStyle: 'italic',
-                        marginTop: '4px',
-                        maxWidth: '80px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        background: 'rgba(0, 0, 0, 0.7)',
-                        padding: '2px 6px',
-                        borderRadius: '4px',
-                        border: '1px solid #fbbf24'
-                      }}>
+                      <div 
+                        className="player-typing-bubble" 
+                        style={{
+                          position: 'absolute',
+                          left: `calc(50% + ${x}px - 4rem)`,
+                          top: `calc(50% + ${y}px - 5.5rem)`, // Position above the player card
+                          fontSize: '0.8rem',
+                          color: '#fbbf24',
+                          fontWeight: 'bold',
+                          fontStyle: 'italic',
+                          maxWidth: '120px',
+                          minWidth: '60px',
+                          textAlign: 'center',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          background: 'rgba(0, 0, 0, 0.85)',
+                          padding: '6px 10px',
+                          borderRadius: '12px',
+                          border: '2px solid #fbbf24',
+                          boxShadow: '0 4px 12px rgba(251, 191, 36, 0.3)',
+                          zIndex: 10,
+                          transform: 'translateX(-50%)', // Center it horizontally
+                          animation: 'typingPulse 1.5s ease-in-out infinite alternate'
+                        }}
+                      >
                         "{player.currentlyTyping}"
+                        {/* Small arrow pointing to player */}
+                        <div style={{
+                          position: 'absolute',
+                          bottom: '-8px',
+                          left: '50%',
+                          transform: 'translateX(-50%)',
+                          width: '0',
+                          height: '0',
+                          borderLeft: '8px solid transparent',
+                          borderRight: '8px solid transparent',
+                          borderTop: '8px solid #fbbf24'
+                        }}></div>
                       </div>
                     )}
-                    
-                    {/* Lives display */}
-                    <div className="player-position-lives">
-                      {[...Array(Math.max(0, player.lives))].map((_, i) => (
-                        <div key={i} className={`life-dot-small ${isBeingShot ? 'being-shot' : ''}`}></div>
-                      ))}
-                      {[...Array(Math.max(0, 3 - player.lives))].map((_, i) => (
-                        <div key={`lost-${i}`} className="life-lost">×</div>
-                      ))}
-                    </div>
-                    
-                    {/* Score */}
-                    <div className="player-position-score">{player.score}</div>
                   </div>
                 );
               })}
