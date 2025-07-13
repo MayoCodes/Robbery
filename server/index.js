@@ -345,7 +345,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Disconnect - SIMPLIFIED and more reliable
+  // Disconnect - ULTRA SIMPLIFIED
   socket.on('disconnect', () => {
     console.log(`Player ${socket.id} disconnected`);
     
@@ -356,19 +356,14 @@ io.on('connection', (socket) => {
     if (!game) return;
     
     const disconnectedPlayer = game.players.find(p => p.id === socket.id);
-    const wasCurrentPlayer = game.players[game.currentPlayer]?.id === socket.id;
+    console.log(`Removing player: ${disconnectedPlayer?.name}`);
     
-    console.log(`Disconnected: ${disconnectedPlayer?.name}, was current: ${wasCurrentPlayer}, game state: ${game.gameState}`);
-    
-    // Remove the disconnected player
+    // Simply remove the player
     game.players = game.players.filter(p => p.id !== socket.id);
-    
-    // Clean up
     playerSockets.delete(socket.id);
     
-    // Handle empty game
+    // If no players left, delete game
     if (game.players.length === 0) {
-      console.log('No players left, deleting game');
       games.delete(partyCode);
       return;
     }
@@ -379,90 +374,71 @@ io.on('connection', (socket) => {
       if (newHost) {
         game.host = newHost.id;
         newHost.isHost = true;
-        console.log(`Host transferred to: ${newHost.name}`);
       }
     }
     
-    // Handle game state based on current state
-    if (game.gameState === 'lobby') {
-      // Simple case - just update lobby
+    // If not playing, just update and return
+    if (game.gameState !== 'playing') {
       io.to(partyCode).emit('gameStateUpdate', game);
-      io.to(partyCode).emit('chatMessage', {
-        type: 'system',
-        message: `${disconnectedPlayer?.name || 'Player'} left the game`,
-        timestamp: Date.now()
-      });
-    } else if (game.gameState === 'playing') {
-      // Clear any running timer
-      if (game.timerId) {
-        clearInterval(game.timerId);
-        game.timerId = null;
-      }
-      
-      // Check if we have enough players to continue
-      const alivePlayers = game.players.filter(p => p.lives > 0);
-      if (alivePlayers.length <= 1) {
-        console.log('Not enough players after disconnect, ending game');
-        game.gameState = 'finished';
-        io.to(partyCode).emit('gameStateUpdate', game);
-        return;
-      }
-      
-      // Update round tracking
-      game.playersAliveAtRoundStart = alivePlayers.length;
-      
-      // If it was the current player's turn, find next player
-      if (wasCurrentPlayer) {
-        // Reset current player to 0 and find first alive player
-        game.currentPlayer = 0;
-        while (game.currentPlayer < game.players.length && game.players[game.currentPlayer].lives <= 0) {
-          game.currentPlayer++;
-        }
-        
-        // Safety check
-        if (game.currentPlayer >= game.players.length) {
-          game.currentPlayer = 0;
-        }
-        
-        // Set new turn
-        game.target = getRandomTarget();
-        game.timeLeft = game.maxTime;
-        
-        // Clear typing states
-        game.players.forEach(player => {
-          player.currentlyTyping = '';
-        });
-        
-        console.log(`New current player: ${game.players[game.currentPlayer]?.name}`);
-      } else {
-        // Adjust current player index if it's out of bounds
-        if (game.currentPlayer >= game.players.length) {
-          game.currentPlayer = 0;
-        }
-      }
-      
-      // Send updated game state
-      io.to(partyCode).emit('gameStateUpdate', game);
-      
-      // Send chat message
-      io.to(partyCode).emit('chatMessage', {
-        type: 'system',
-        message: `${disconnectedPlayer?.name || 'Player'} disconnected. ${game.players[game.currentPlayer]?.name}'s turn!`,
-        timestamp: Date.now()
-      });
-      
-      // Continue game if it was current player's turn
-      if (wasCurrentPlayer) {
-        if (game.players[game.currentPlayer]?.isBot) {
-          handleBotTurn(partyCode);
-        } else {
-          startGameTimer(partyCode);
-        }
-      }
-    } else {
-      // Finished or other states - just update
-      io.to(partyCode).emit('gameStateUpdate', game);
+      return;
     }
+    
+    // PLAYING STATE - Force restart the turn cycle
+    console.log('Game was playing, restarting turn cycle...');
+    
+    // Clear any timer
+    if (game.timerId) {
+      clearInterval(game.timerId);
+      game.timerId = null;
+    }
+    
+    // Check if enough players
+    const alivePlayers = game.players.filter(p => p.lives > 0);
+    if (alivePlayers.length <= 1) {
+      game.gameState = 'finished';
+      io.to(partyCode).emit('gameStateUpdate', game);
+      return;
+    }
+    
+    // Reset to first alive player
+    game.currentPlayer = 0;
+    while (game.currentPlayer < game.players.length && game.players[game.currentPlayer].lives <= 0) {
+      game.currentPlayer++;
+    }
+    
+    // Safety check
+    if (game.currentPlayer >= game.players.length) {
+      game.currentPlayer = 0;
+    }
+    
+    // Fresh turn
+    game.target = getRandomTarget();
+    game.timeLeft = game.maxTime;
+    game.playersAliveAtRoundStart = alivePlayers.length;
+    
+    // Clear typing
+    game.players.forEach(p => p.currentlyTyping = '');
+    
+    console.log(`Restarting with player: ${game.players[game.currentPlayer]?.name}`);
+    
+    // Update everyone
+    io.to(partyCode).emit('gameStateUpdate', game);
+    
+    // Chat message
+    io.to(partyCode).emit('chatMessage', {
+      type: 'system',
+      message: `${disconnectedPlayer?.name || 'Player'} left. ${game.players[game.currentPlayer]?.name}'s turn!`,
+      timestamp: Date.now()
+    });
+    
+    // Start new turn
+    setTimeout(() => {
+      if (game.players[game.currentPlayer]?.isBot) {
+        handleBotTurn(partyCode);
+      } else {
+        startGameTimer(partyCode);
+      }
+    }, 1000);
   });
 });
 
