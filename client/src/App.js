@@ -41,7 +41,7 @@ const ROBBERY = () => {
     const newSocket = io(
       process.env.REACT_APP_SOCKET_URL || 
       (process.env.NODE_ENV === 'production' 
-        ? 'https://robbery-server-xqzx.onrender.com'  // Update with your actual Render URL
+        ? 'https://robbery.onrender.com'  // Use your actual Render URL
         : 'http://localhost:3001'),
       {
         transports: ['websocket', 'polling'],
@@ -55,10 +55,12 @@ const ROBBERY = () => {
     // Connection status
     newSocket.on('connect', () => {
       setConnectionStatus('connected');
+      console.log('Socket connected:', newSocket.id);
     });
 
     newSocket.on('disconnect', () => {
       setConnectionStatus('disconnected');
+      console.log('Socket disconnected');
     });
 
     // Party created
@@ -101,6 +103,7 @@ const ROBBERY = () => {
 
     // NEW: Handle real-time typing updates
     newSocket.on('playerTypingUpdate', ({ playerId, word }) => {
+      console.log('Typing update received:', playerId, word);
       setPlayers(prev => prev.map(player => 
         player.id === playerId 
           ? { ...player, currentlyTyping: word }
@@ -430,6 +433,11 @@ const ROBBERY = () => {
     setIsValidatingWord(true);
     setWordValidationMessage('Checking word...');
     
+    // Clear typing state immediately when submitting
+    if (socket) {
+      socket.emit('typingUpdate', { word: '' });
+    }
+    
     // Check if word contains target
     if (!word.toLowerCase().includes(target.toLowerCase())) {
       setIsValidatingWord(false);
@@ -483,8 +491,12 @@ const ROBBERY = () => {
     const word = e.target.value;
     setCurrentWord(word);
     
+    // Check if it's currently your turn
+    const currentPlayerData = players[currentPlayer];
+    const isCurrentlyYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
+    
     // Broadcast typing to other players
-    if (socket && isYourTurn) {
+    if (socket && isCurrentlyYourTurn) {
       socket.emit('typingUpdate', { word });
     }
   };
@@ -953,14 +965,19 @@ const ROBBERY = () => {
                     {/* NEW: Show what they're typing */}
                     {player.currentlyTyping && (
                       <div className="player-typing" style={{
-                        fontSize: '0.7rem',
-                        color: '#fdba74',
+                        fontSize: '0.75rem',
+                        color: '#fbbf24',
+                        fontWeight: 'bold',
                         fontStyle: 'italic',
-                        marginTop: '2px',
-                        maxWidth: '60px',
+                        marginTop: '4px',
+                        maxWidth: '80px',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
+                        whiteSpace: 'nowrap',
+                        background: 'rgba(0, 0, 0, 0.7)',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        border: '1px solid #fbbf24'
                       }}>
                         "{player.currentlyTyping}"
                       </div>
