@@ -175,20 +175,51 @@ const ROBBERY = () => {
     };
   }, []);
 
-  // Auto-focus input when it becomes your turn
+  // Auto-focus input when it becomes your turn - IMPROVED
   useEffect(() => {
     if (gameState === 'playing') {
       const currentPlayerData = players[currentPlayer];
       const isYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
       
-      if (isYourTurn && inputRef.current) {
-        // Small delay to ensure the input is rendered and ready
-        setTimeout(() => {
-          inputRef.current?.focus();
-        }, 100);
+      if (isYourTurn && inputRef.current && !isValidatingWord) {
+        console.log('Attempting to focus input for player turn');
+        
+        // Multiple focus attempts with increasing delays to ensure it works
+        const focusInput = () => {
+          if (inputRef.current && !inputRef.current.disabled) {
+            inputRef.current.focus();
+            inputRef.current.select(); // Also select any existing text
+            console.log('Input focused successfully');
+          }
+        };
+        
+        // Immediate focus
+        focusInput();
+        
+        // Backup focuses in case the first one fails
+        setTimeout(focusInput, 50);
+        setTimeout(focusInput, 150);
+        setTimeout(focusInput, 300);
       }
     }
-  }, [currentPlayer, gameState, players, playerId, playerName]);
+  }, [currentPlayer, gameState, players, playerId, playerName, isValidatingWord]);
+
+  // Additional effect to focus when game state changes to playing
+  useEffect(() => {
+    if (gameState === 'playing' && inputRef.current) {
+      const currentPlayerData = players[currentPlayer];
+      const isYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
+      
+      if (isYourTurn) {
+        setTimeout(() => {
+          if (inputRef.current && !inputRef.current.disabled) {
+            inputRef.current.focus();
+            console.log('Game started - input focused');
+          }
+        }, 500);
+      }
+    }
+  }, [gameState]);
 
   // IMPROVED: Audio initialization with user interaction handling
   const initializeAudio = () => {
@@ -1178,15 +1209,27 @@ const ROBBERY = () => {
                   ref={inputRef}
                   type="text"
                   value={currentWord}
-                  onChange={handleWordChange} // NEW: Use the new handler for typing updates
+                  onChange={handleWordChange}
                   onKeyPress={(e) => {
                     if (e.key === 'Enter' && currentWord.trim() && gameState === 'playing' && isYourTurn && !isValidatingWord) {
                       submitWord(currentWord.trim());
                     }
                   }}
+                  onFocus={() => console.log('Input focused by user')}
+                  onClick={() => {
+                    // Ensure focus when clicked
+                    if (inputRef.current) {
+                      inputRef.current.focus();
+                    }
+                  }}
                   className="word-input"
                   placeholder={isYourTurn ? (isValidatingWord ? "Validating..." : "Type your word...") : "Not your turn..."}
                   disabled={!isYourTurn || isValidatingWord}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  tabIndex={isYourTurn ? 0 : -1}
                 />
                 <button
                   onClick={() => submitWord(currentWord.trim())}
