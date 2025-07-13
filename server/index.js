@@ -54,7 +54,7 @@ io.on('connection', (socket) => {
       timeLeft: 15,
       maxTime: 15,
       round: 1,
-      usedWords: new Set(),
+      usedWords: [], // Changed from Set to Array
       chatMessages: []
     };
     
@@ -131,7 +131,7 @@ io.on('connection', (socket) => {
     game.gameState = 'playing';
     game.target = getRandomTarget();
     game.currentPlayer = 0;
-    game.usedWords = new Set();
+    game.usedWords = []; // Reset as empty array
     
     io.to(partyCode).emit('gameStateUpdate', game);
     
@@ -139,7 +139,7 @@ io.on('connection', (socket) => {
     startGameTimer(partyCode);
   });
 
-  // Submit word
+  // Submit word with validation
   socket.on('submitWord', (word) => {
     const partyCode = playerSockets.get(socket.id);
     const game = games.get(partyCode);
@@ -149,12 +149,13 @@ io.on('connection', (socket) => {
     const currentPlayerData = game.players[game.currentPlayer];
     if (currentPlayerData.id !== socket.id) return;
 
+    // Basic validation (target contains check already done on client)
     const isValid = word.length >= 3 && 
                    word.toLowerCase().includes(game.target.toLowerCase()) &&
-                   !game.usedWords.has(word.toLowerCase());
+                   !game.usedWords.includes(word.toLowerCase());
 
     if (isValid) {
-      game.usedWords.add(word.toLowerCase());
+      game.usedWords.push(word.toLowerCase());
       currentPlayerData.score += word.length;
       
       io.to(partyCode).emit('chatMessage', {
@@ -166,6 +167,7 @@ io.on('connection', (socket) => {
       
       nextTurn(partyCode);
     } else {
+      // Invalid word, but client handles attempts
       currentPlayerData.lives--;
       io.to(partyCode).emit('playerEliminated', currentPlayerData.id);
       
@@ -173,6 +175,32 @@ io.on('connection', (socket) => {
         nextTurn(partyCode);
       }, 1000);
     }
+  });
+
+  // Handle when player runs out of attempts
+  socket.on('outOfAttempts', () => {
+    const partyCode = playerSockets.get(socket.id);
+    const game = games.get(partyCode);
+    
+    if (!game || game.gameState !== 'playing') return;
+    
+    const currentPlayerData = game.players[game.currentPlayer];
+    if (currentPlayerData.id !== socket.id) return;
+
+    // Player loses a life for running out of attempts
+    currentPlayerData.lives--;
+    
+    io.to(partyCode).emit('chatMessage', {
+      type: 'error',
+      message: `${currentPlayerData.name} ran out of attempts!`,
+      timestamp: Date.now()
+    });
+    
+    io.to(partyCode).emit('playerEliminated', currentPlayerData.id);
+    
+    setTimeout(() => {
+      nextTurn(partyCode);
+    }, 1000);
   });
 
   // Chat message
@@ -291,12 +319,12 @@ function handleBotTurn(partyCode) {
   setTimeout(() => {
     const westernWords = ['horse', 'trail', 'dust', 'silver', 'sheriff', 'the', 'and', 'water'];
     const validWords = westernWords.filter(word => 
-      word.includes(game.target.toLowerCase()) && !game.usedWords.has(word)
+      word.includes(game.target.toLowerCase()) && !game.usedWords.includes(word) // Changed to use includes
     );
     
     if (validWords.length > 0 && Math.random() > 0.1) {
       const word = validWords[0];
-      game.usedWords.add(word);
+      game.usedWords.push(word); // Changed to push to array
       bot.score += word.length;
       
       io.to(partyCode).emit('chatMessage', {

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Clock, Users, Trophy, Settings, Zap, Shield, Plus, MessageCircle, Crown, Star, Volume2, VolumeX, Play, UserPlus, Home, Bot, Trash2 } from 'lucide-react';
-import * as Tone from 'tone';
 import io from 'socket.io-client';
 
 const ROBBERY = () => {
@@ -27,10 +26,15 @@ const ROBBERY = () => {
   const [shootingAnimation, setShootingAnimation] = useState(null);
   const [screenFlash, setScreenFlash] = useState(false);
   const [socket, setSocket] = useState(null);
+  const [attemptsLeft, setAttemptsLeft] = useState(5);
+  const [wordValidationMessage, setWordValidationMessage] = useState('');
+  const [isValidatingWord, setIsValidatingWord] = useState(false);
+  const [powerups, setPowerups] = useState([]);
+  const [availablePowerups, setAvailablePowerups] = useState(0);
   
   const inputRef = useRef();
-  const synthRef = useRef();
-  const countdownSynthRef = useRef();
+  const audioContextRef = useRef();
+  const lastTickTimeRef = useRef(0);
 
   // Socket.IO connection
   useEffect(() => {
@@ -55,6 +59,7 @@ const ROBBERY = () => {
     newSocket.on('partyCreated', ({ partyCode: code, gameState: state }) => {
       setPartyCode(code);
       setPlayers(state.players);
+      setUsedWords(new Set(state.usedWords || []));
       setIsHost(true);
       setGameState('lobby');
       addChatMessage('system', `Party ${code} created successfully`);
@@ -68,8 +73,18 @@ const ROBBERY = () => {
       setTimeLeft(state.timeLeft);
       setMaxTime(state.maxTime);
       setRound(state.round);
-      setUsedWords(new Set(state.usedWords));
+      setUsedWords(new Set(state.usedWords || []));
       setGameState(state.gameState);
+      setAttemptsLeft(5); // Reset attempts on new turn
+      setWordValidationMessage('');
+      
+      // Update powerups for Wild West mode
+      if (state.gameMode === 'wildwest') {
+        const myPlayer = state.players.find(p => p.id === newSocket.id);
+        if (myPlayer) {
+          setAvailablePowerups(myPlayer.powerups || 0);
+        }
+      }
       
       // Update host status
       const myPlayer = state.players.find(p => p.id === newSocket.id);
@@ -78,10 +93,48 @@ const ROBBERY = () => {
       }
     });
 
+    // Powerup received
+    newSocket.on('powerupReceived', ({ type, message }) => {
+      setAvailablePowerups(prev => prev + 1);
+      addChatMessage('success', message);
+      playSound('powerup');
+    });
+
+    // Powerup used
+    newSocket.on('powerupUsed', ({ type, message, effect }) => {
+      addChatMessage('system', message);
+      
+      // Apply powerup effects
+      if (effect.extraTime) {
+        setTimeLeft(prev => prev + effect.extraTime);
+      }
+      if (effect.extraAttempts) {
+        setAttemptsLeft(prev => prev + effect.extraAttempts);
+      }
+    });
+
+    // Word validation response
+    newSocket.on('wordValidationResult', ({ valid, attempts, message }) => {
+      setIsValidatingWord(false);
+      setAttemptsLeft(attempts);
+      setWordValidationMessage(message);
+      
+      if (valid) {
+        setCurrentWord('');
+        setWordValidationMessage('');
+      } else if (attempts === 0) {
+        // Out of attempts, turn will end automatically
+        setCurrentWord('');
+        setTimeout(() => {
+          setWordValidationMessage('');
+        }, 3000);
+      }
+    });
+
     // Timer updates
     newSocket.on('timerUpdate', (time) => {
       setTimeLeft(time);
-      playSound('countdown');
+      playSound('countdown', time, maxTime);
     });
 
     // Chat messages
@@ -104,69 +157,168 @@ const ROBBERY = () => {
     };
   }, []);
 
-  // Initialize audio with simple countdown tick
+  // Initialize simple Web Audio API
   useEffect(() => {
-    const initAudio = async () => {
-      if (soundEnabled && !audioInitialized) {
-        try {
-          await Tone.start();
-          
-          synthRef.current = new Tone.Synth({
-            oscillator: { type: 'sine' },
-            envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.3 }
-          }).toDestination();
-          
-          countdownSynthRef.current = new Tone.Synth({
-            oscillator: { type: 'square' },
-            envelope: { attack: 0.01, decay: 0.1, sustain: 0, release: 0.1 }
-          }).toDestination();
-          
-          setAudioInitialized(true);
-        } catch (error) {
-          console.warn('Audio initialization failed:', error);
-        }
+    if (soundEnabled && !audioInitialized) {
+      try {
+        // Create audio context
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioContextRef.current = new AudioContext();
+        setAudioInitialized(true);
+      } catch (error) {
+        console.warn('Audio initialization failed:', error);
+        setSoundEnabled(false);
       }
-    };
-    
-    initAudio();
+    }
   }, [soundEnabled, audioInitialized]);
 
-  const playSound = (type, note = 'C4', duration = '8n') => {
-    if (!soundEnabled || !audioInitialized) return;
+  // Simple beep generator
+  const createBeep = (frequency, duration, volume = 0.1, type = 'sine') => {
+    if (!audioContextRef.current || !soundEnabled) return;
     
     try {
-      switch (type) {
-        case 'countdown':
-          if (countdownSynthRef.current) {
-            countdownSynthRef.current.triggerAttackRelease('C5', '16n');
-          }
-          break;
-        case 'success':
-          synthRef.current.triggerAttackRelease('E5', '8n');
-          setTimeout(() => synthRef.current.triggerAttackRelease('G5', '8n'), 100);
-          break;
-        case 'shot':
-          synthRef.current.triggerAttackRelease('C3', '8n');
-          setTimeout(() => synthRef.current.triggerAttackRelease('G2', '8n'), 100);
-          break;
-        case 'gamestart':
-          synthRef.current.triggerAttackRelease('C5', '8n');
-          setTimeout(() => synthRef.current.triggerAttackRelease('E5', '8n'), 100);
-          setTimeout(() => synthRef.current.triggerAttackRelease('G5', '4n'), 200);
-          break;
-        case 'gameover':
-          synthRef.current.triggerAttackRelease('G4', '4n');
-          setTimeout(() => synthRef.current.triggerAttackRelease('E4', '4n'), 200);
-          setTimeout(() => synthRef.current.triggerAttackRelease('C4', '2n'), 400);
-          break;
-        case 'newturn':
-          synthRef.current.triggerAttackRelease('A4', '16n');
-          break;
-        default:
-          synthRef.current.triggerAttackRelease(note, duration);
+      const context = audioContextRef.current;
+      
+      // Resume context if suspended (browser requirement)
+      if (context.state === 'suspended') {
+        context.resume();
       }
+      
+      const oscillator = context.createOscillator();
+      const gainNode = context.createGain();
+      
+      // Connect nodes
+      oscillator.connect(gainNode);
+      gainNode.connect(context.destination);
+      
+      // Configure oscillator
+      oscillator.frequency.setValueAtTime(frequency, context.currentTime);
+      oscillator.type = type;
+      
+      // Configure volume envelope
+      gainNode.gain.setValueAtTime(0, context.currentTime);
+      gainNode.gain.linearRampToValueAtTime(volume, context.currentTime + 0.01);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, context.currentTime + duration);
+      
+      // Play sound
+      oscillator.start(context.currentTime);
+      oscillator.stop(context.currentTime + duration);
+      
     } catch (error) {
       console.warn('Sound playback failed:', error);
+    }
+  };
+
+  // Advanced countdown tick with progressive speed and pitch
+  const createCountdownTick = (timeLeft, maxTime) => {
+    if (!audioContextRef.current || !soundEnabled) return;
+    
+    try {
+      const context = audioContextRef.current;
+      
+      // Resume context if suspended
+      if (context.state === 'suspended') {
+        context.resume();
+      }
+      
+      // Calculate urgency (0 to 1, where 1 is most urgent)
+      const urgency = Math.max(0, (maxTime - timeLeft) / maxTime);
+      
+      // Progressive frequency increase (bomb ticking gets higher pitched)
+      const baseFrequency = 800;
+      const frequency = baseFrequency + (urgency * 1200); // Goes from 800Hz to 2000Hz
+      
+      // Progressive volume increase
+      const volume = 0.05 + (urgency * 0.15); // Goes from 0.05 to 0.2
+      
+      // Shorter duration when more urgent
+      const duration = 0.1 + (0.05 * (1 - urgency)); // Goes from 0.15s to 0.1s
+      
+      // Create the tick sound
+      const oscillator = context.createOscillator();
+      const gainNode = context.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(context.destination);
+      
+      // Sharp, urgent sound for critical moments
+      if (timeLeft <= 3) {
+        oscillator.type = 'square'; // More aggressive sound
+        oscillator.frequency.setValueAtTime(frequency, context.currentTime);
+        oscillator.frequency.linearRampToValueAtTime(frequency * 1.2, context.currentTime + duration/2);
+        oscillator.frequency.linearRampToValueAtTime(frequency, context.currentTime + duration);
+      } else {
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(frequency, context.currentTime);
+      }
+      
+      // Quick attack, sharp decay for ticking effect
+      gainNode.gain.setValueAtTime(0, context.currentTime);
+      gainNode.gain.linearRampToValueAtTime(volume, context.currentTime + 0.01);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, context.currentTime + duration);
+      
+      oscillator.start(context.currentTime);
+      oscillator.stop(context.currentTime + duration);
+      
+      // Store tick time for potential rapid-fire effect
+      lastTickTimeRef.current = Date.now();
+      
+    } catch (error) {
+      console.warn('Countdown tick failed:', error);
+    }
+  };
+
+  const playSound = (type, timeLeft = 15, maxTime = 15) => {
+    if (!soundEnabled || !audioInitialized) return;
+    
+    switch (type) {
+      case 'countdown':
+        createCountdownTick(timeLeft, maxTime);
+        break;
+      case 'success':
+        // Pleasant success chord
+        createBeep(523, 0.2, 0.1); // C5
+        setTimeout(() => createBeep(659, 0.2, 0.1), 100); // E5
+        setTimeout(() => createBeep(784, 0.3, 0.1), 200); // G5
+        break;
+      case 'shot':
+        // Gunshot effect - low thud followed by sharp crack
+        createBeep(80, 0.1, 0.2, 'square');
+        setTimeout(() => createBeep(1200, 0.05, 0.15, 'sawtooth'), 50);
+        break;
+      case 'gamestart':
+        // Rising fanfare
+        createBeep(440, 0.2, 0.1); // A4
+        setTimeout(() => createBeep(523, 0.2, 0.1), 150); // C5
+        setTimeout(() => createBeep(659, 0.2, 0.1), 300); // E5
+        setTimeout(() => createBeep(784, 0.4, 0.1), 450); // G5
+        break;
+      case 'gameover':
+        // Dramatic descending sequence
+        createBeep(784, 0.3, 0.1); // G5
+        setTimeout(() => createBeep(659, 0.3, 0.1), 200); // E5
+        setTimeout(() => createBeep(523, 0.3, 0.1), 400); // C5
+        setTimeout(() => createBeep(261, 0.6, 0.1), 600); // C4
+        break;
+      case 'newturn':
+        // Quick notification beep
+        createBeep(880, 0.1, 0.08);
+        break;
+      case 'powerup':
+        // Magical power-up sound
+        createBeep(440, 0.1, 0.1);
+        setTimeout(() => createBeep(554, 0.1, 0.1), 80);
+        setTimeout(() => createBeep(659, 0.1, 0.1), 160);
+        setTimeout(() => createBeep(880, 0.2, 0.1), 240);
+        break;
+      case 'elimination':
+        // Sad elimination sound
+        createBeep(330, 0.2, 0.1);
+        setTimeout(() => createBeep(277, 0.2, 0.1), 150);
+        setTimeout(() => createBeep(220, 0.4, 0.1), 300);
+        break;
+      default:
+        createBeep(440, 0.2, 0.1);
     }
   };
 
@@ -175,12 +327,11 @@ const ROBBERY = () => {
     setScreenFlash(true);
     playSound('shot');
     
-    // Screen flash duration
     setTimeout(() => {
       setScreenFlash(false);
+      playSound('elimination'); // Add elimination sound after the shot
     }, 200);
     
-    // Clear shooting animation
     setTimeout(() => {
       setShootingAnimation(null);
     }, 1000);
@@ -221,14 +372,94 @@ const ROBBERY = () => {
 
   const startGame = () => {
     if (!isHost || players.length < 2 || !socket) return;
-    socket.emit('startGame');
+    socket.emit('startGame', { gameMode });
     playSound('gamestart');
   };
 
-  const submitWord = (word) => {
-    if (!word.trim() || !socket) return;
-    socket.emit('submitWord', word.trim());
-    setCurrentWord('');
+  // Word validation function
+  const validateWord = async (word) => {
+    try {
+      const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word.toLowerCase()}`);
+      return response.ok;
+    } catch (error) {
+      console.warn('Dictionary API failed, using basic validation:', error);
+      // Fallback: basic word validation (length > 2, contains letters only)
+      return word.length >= 3 && /^[a-zA-Z]+$/.test(word);
+    }
+  };
+
+  const submitWord = async (word) => {
+    if (!word.trim() || !socket || isValidatingWord) return;
+    
+    setIsValidatingWord(true);
+    setWordValidationMessage('Checking word...');
+    
+    // Check if word contains target
+    if (!word.toLowerCase().includes(target.toLowerCase())) {
+      setIsValidatingWord(false);
+      setWordValidationMessage(`Word must contain "${target}"`);
+      return;
+    }
+    
+    // Check if word was already used
+    if (usedWords.has(word.toLowerCase())) {
+      setIsValidatingWord(false);
+      setWordValidationMessage('Word already used!');
+      return;
+    }
+    
+    // Validate if it's a real word
+    const isValidWord = await validateWord(word);
+    
+    if (isValidWord) {
+      // Word is valid, submit to server
+      socket.emit('submitWord', word.trim());
+      setCurrentWord('');
+      setWordValidationMessage('');
+      setIsValidatingWord(false);
+      
+      // In Wild West mode, chance to get powerup on successful word
+      if (gameMode === 'wildwest' && Math.random() < 0.3) { // 30% chance
+        socket.emit('requestPowerup');
+      }
+    } else {
+      // Word is invalid, use an attempt
+      const newAttempts = attemptsLeft - 1;
+      setAttemptsLeft(newAttempts);
+      setIsValidatingWord(false);
+      
+      if (newAttempts > 0) {
+        setWordValidationMessage(`"${word}" is not a valid English word. ${newAttempts} attempts remaining.`);
+      } else {
+        setWordValidationMessage('Out of attempts! You lose a life.');
+        // Emit to server that player ran out of attempts
+        socket.emit('outOfAttempts');
+        setCurrentWord('');
+        setTimeout(() => {
+          setWordValidationMessage('');
+        }, 3000);
+      }
+    }
+  };
+
+  // Powerup functions
+  const usePowerup = (type) => {
+    if (availablePowerups <= 0 || !socket) return;
+    
+    socket.emit('usePowerup', type);
+    setAvailablePowerups(prev => prev - 1);
+  };
+
+  const getPowerupIcon = (type) => {
+    switch (type) {
+      case 'extraTime': return '⏰';
+      case 'skipTurn': return '⏭️';
+      case 'doublePoints': return '💎';
+      case 'extraLife': return '❤️';
+      case 'showHint': return '💡';
+      case 'steal': return '💰';
+      default: return '⚡';
+    }
   };
 
   const sendChatMessage = () => {
@@ -263,53 +494,47 @@ const ROBBERY = () => {
   // Welcome Screen
   if (gameState === 'welcome') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-red-950 via-orange-900 to-amber-950 text-amber-100 relative overflow-hidden">
-        <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-20 left-20 w-32 h-32 bg-red-600 rounded-full blur-3xl"></div>
-          <div className="absolute bottom-20 right-20 w-40 h-40 bg-orange-600 rounded-full blur-3xl"></div>
-          <div className="absolute top-1/2 left-1/3 w-24 h-24 bg-amber-700 rounded-full blur-2xl"></div>
+      <div className="game-container">
+        <div className="game-background-effects">
+          <div className="bg-blob-1"></div>
+          <div className="bg-blob-2"></div>
+          <div className="bg-blob-3"></div>
         </div>
         
-        <div className="relative z-10 min-h-screen flex items-center justify-center p-4">
-          <div className="max-w-md w-full">
+        <div className="game-content">
+          <div className="welcome-content">
             {/* Connection Status */}
-            <div className="text-center mb-4">
-              <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm ${
-                connectionStatus === 'connected' ? 'bg-green-900/50 text-green-300' : 
-                connectionStatus === 'connecting' ? 'bg-yellow-900/50 text-yellow-300' :
-                'bg-red-900/50 text-red-300'
+            <div className="connection-status">
+              <span className={`status-badge ${
+                connectionStatus === 'connected' ? 'status-connected' : 
+                connectionStatus === 'connecting' ? 'status-connecting' :
+                'status-disconnected'
               }`}>
-                <div className={`w-2 h-2 rounded-full ${
-                  connectionStatus === 'connected' ? 'bg-green-400' : 
-                  connectionStatus === 'connecting' ? 'bg-yellow-400 animate-pulse' :
-                  'bg-red-400'
-                }`}></div>
+                <div className={`status-dot ${connectionStatus}`}></div>
                 {connectionStatus === 'connected' ? 'Ready to Play' : 
                  connectionStatus === 'connecting' ? 'Connecting...' : 'Connection Lost'}
               </span>
             </div>
 
             {/* Main Title */}
-            <div className="text-center mb-12">
-              <h1 className="text-7xl font-bold mb-4 text-red-200 tracking-wider drop-shadow-2xl">
-                ROBBERY
-              </h1>
-              <div className="w-32 h-1 bg-red-600 mx-auto mb-4"></div>
-              <p className="text-xl text-orange-300 font-medium">Elite Word Heist</p>
+            <div className="game-title">
+              <h1 className="main-title">ROBBERY</h1>
+              <div className="title-divider"></div>
+              <p className="subtitle">Elite Word Heist</p>
             </div>
 
             {/* Player Registration */}
-            <div className="bg-stone-900/80 backdrop-blur-lg border border-orange-700 rounded-lg p-8 shadow-2xl mb-8">
-              <h2 className="text-2xl font-bold mb-6 text-center text-red-200">Join the Heist</h2>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2 text-orange-300">Player Name</label>
+            <div className="game-card">
+              <h2 className="card-header">Join the Heist</h2>
+              <div className="card-content">
+                <div className="form-group">
+                  <label className="form-label">Player Name</label>
                   <input
                     type="text"
                     value={playerName}
                     onChange={(e) => setPlayerName(e.target.value)}
                     placeholder="Enter your name"
-                    className="w-full p-4 bg-stone-800/60 border border-orange-600 rounded-lg text-amber-100 placeholder-stone-400 focus:border-red-500 focus:outline-none transition-colors"
+                    className="form-input"
                     maxLength={12}
                   />
                 </div>
@@ -317,29 +542,26 @@ const ROBBERY = () => {
                 <button
                   onClick={createParty}
                   disabled={!playerName.trim() || connectionStatus !== 'connected'}
-                  className="w-full py-4 bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-stone-100 font-bold text-lg rounded-lg transition-all transform hover:scale-105 shadow-lg flex items-center justify-center gap-2"
+                  className="btn btn-primary"
                 >
-                  <Plus className="w-5 h-5" />
+                  <Plus className="icon" />
                   Create Party
                 </button>
 
-                <div className="relative my-6">
-                  <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-orange-600"></div>
-                  </div>
-                  <div className="relative flex justify-center text-sm">
-                    <span className="px-4 bg-stone-900 text-orange-400">or</span>
+                <div className="divider">
+                  <div className="divider-text">
+                    <span>or</span>
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium mb-2 text-orange-300">Party Code</label>
+                <div className="form-group">
+                  <label className="form-label">Party Code</label>
                   <input
                     type="text"
                     value={partyCode}
                     onChange={(e) => setPartyCode(e.target.value.toUpperCase())}
                     placeholder="Enter party code"
-                    className="w-full p-4 bg-stone-800/60 border border-orange-600 rounded-lg text-amber-100 placeholder-stone-400 focus:border-red-500 focus:outline-none transition-colors"
+                    className="form-input"
                     maxLength={6}
                   />
                 </div>
@@ -347,21 +569,21 @@ const ROBBERY = () => {
                 <button
                   onClick={joinParty}
                   disabled={!playerName.trim() || !partyCode.trim() || connectionStatus !== 'connected'}
-                  className="w-full py-4 bg-orange-700 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-amber-100 font-bold text-lg rounded-lg transition-all transform hover:scale-105 shadow-lg flex items-center justify-center gap-2"
+                  className="btn btn-secondary"
                 >
-                  <UserPlus className="w-5 h-5" />
+                  <UserPlus className="icon" />
                   Join Party
                 </button>
               </div>
             </div>
 
             {/* Audio Control */}
-            <div className="text-center">
+            <div style={{ textAlign: 'center' }}>
               <button
                 onClick={() => setSoundEnabled(!soundEnabled)}
-                className="inline-flex items-center gap-2 px-6 py-3 bg-stone-800/60 border border-orange-600 rounded-lg hover:bg-stone-700/60 transition-all text-amber-100"
+                className="btn btn-outline"
               >
-                {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                {soundEnabled ? <Volume2 className="icon" /> : <VolumeX className="icon" />}
                 <span>{soundEnabled ? 'Sound On' : 'Sound Off'}</span>
               </button>
             </div>
@@ -377,48 +599,45 @@ const ROBBERY = () => {
     const bots = players.filter(p => p.isBot);
 
     return (
-      <div className="min-h-screen bg-gradient-to-br from-red-950 via-orange-900 to-amber-950 text-amber-100 relative overflow-hidden">
-        <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-20 left-20 w-32 h-32 bg-red-600 rounded-full blur-3xl"></div>
-          <div className="absolute bottom-20 right-20 w-40 h-40 bg-orange-600 rounded-full blur-3xl"></div>
+      <div className="game-container">
+        <div className="game-background-effects">
+          <div className="bg-blob-1"></div>
+          <div className="bg-blob-2"></div>
         </div>
         
-        <div className="relative z-10 container mx-auto px-4 py-8">
+        <div className="lobby-container">
           {/* Header */}
-          <div className="flex justify-between items-center mb-8">
-            <div>
-              <h1 className="text-4xl font-bold text-red-200 mb-2">ROBBERY HIDEOUT</h1>
-              <p className="text-orange-300">Party Code: <span className="text-red-300 font-mono font-bold">{partyCode}</span></p>
+          <div className="game-header">
+            <div className="header-left">
+              <h1 className="lobby-title">ROBBERY HIDEOUT</h1>
+              <p className="party-code-display">Party Code: <span className="party-code">{partyCode}</span></p>
             </div>
-            <button
-              onClick={leaveParty}
-              className="px-6 py-3 bg-stone-700 hover:bg-stone-600 text-amber-100 rounded-lg transition-all flex items-center gap-2"
-            >
-              <Home className="w-4 h-4" />
+            <button onClick={leaveParty} className="btn btn-outline">
+              <Home className="icon" />
               Leave
             </button>
           </div>
 
-          <div className="max-w-7xl mx-auto grid lg:grid-cols-3 gap-8">
+          <div className="lobby-grid">
             {/* Players Panel */}
-            <div className="bg-stone-900/80 backdrop-blur-lg border border-orange-700 rounded-lg p-6 shadow-2xl">
-              <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-red-200">
-                <Users className="w-6 h-6" />
+            <div className="game-card">
+              <h2 className="card-header">
+                <Users className="icon-lg" />
                 Players ({humanPlayers.length}/6)
               </h2>
-              <div className="space-y-3">
+              <div className="player-list">
                 {humanPlayers.map(player => (
-                  <div key={player.id} className="flex items-center gap-4 p-4 bg-stone-800/60 border border-orange-700 rounded-lg">
-                    <div className="w-10 h-10 bg-red-700 rounded-full flex items-center justify-center text-stone-100 font-bold text-lg">
+                  <div key={player.id} className="player-item">
+                    <div className="player-avatar">
                       {player.name.charAt(0)}
                     </div>
-                    <div className="flex-1">
-                      <span className="font-semibold text-amber-100">{player.name}</span>
-                      {player.isHost && <Crown className="w-4 h-4 text-amber-400 inline ml-2" />}
+                    <div className="player-info">
+                      <span className="player-name">{player.name}</span>
+                      {player.isHost && <Crown className="icon" style={{ color: '#fbbf24', marginLeft: '0.5rem' }} />}
                     </div>
-                    <div className="flex gap-1">
+                    <div className="player-lives">
                       {[...Array(3)].map((_, i) => (
-                        <div key={i} className="w-3 h-3 bg-red-500 rounded-full"></div>
+                        <div key={i} className="life-dot"></div>
                       ))}
                     </div>
                   </div>
@@ -426,35 +645,32 @@ const ROBBERY = () => {
               </div>
 
               {/* Bot Management */}
-              <div className="mt-8">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-bold text-red-200 flex items-center gap-2">
-                    <Bot className="w-5 h-5" />
+              <div className="bot-section">
+                <div className="bot-header">
+                  <h3 className="bot-title">
+                    <Bot className="icon" />
                     AI Players ({bots.length}/4)
                   </h3>
                   {isHost && bots.length < 4 && (
-                    <button
-                      onClick={addPlayer}
-                      className="px-3 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded-lg text-sm font-bold flex items-center gap-1"
-                    >
-                      <Plus className="w-4 h-4" />
+                    <button onClick={addPlayer} className="btn btn-blue btn-small">
+                      <Plus className="icon" />
                       Add AI
                     </button>
                   )}
                 </div>
-                <div className="space-y-2">
+                <div className="bot-list">
                   {bots.map(bot => (
-                    <div key={bot.id} className="flex items-center gap-3 p-3 bg-blue-900/30 border border-blue-700/50 rounded-lg">
-                      <div className="w-8 h-8 bg-blue-700 rounded-full flex items-center justify-center text-white font-bold text-sm">
-                        <Bot className="w-4 h-4" />
+                    <div key={bot.id} className="bot-item">
+                      <div className="bot-avatar">
+                        <Bot className="icon" />
                       </div>
-                      <span className="flex-1 font-medium text-blue-200">{bot.name}</span>
+                      <span className="bot-name">{bot.name}</span>
                       {isHost && (
                         <button
                           onClick={() => removePlayer(bot.id)}
-                          className="p-1 text-red-400 hover:text-red-300 transition-colors"
+                          className="remove-btn"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="icon" />
                         </button>
                       )}
                     </div>
@@ -464,28 +680,37 @@ const ROBBERY = () => {
             </div>
 
             {/* Game Settings */}
-            <div className="bg-stone-900/80 backdrop-blur-lg border border-orange-700 rounded-lg p-6 shadow-2xl">
-              <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-red-200">
-                <Settings className="w-6 h-6" />
+            <div className="game-card">
+              <h2 className="card-header">
+                <Settings className="icon-lg" />
                 Game Settings
               </h2>
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium mb-3 text-orange-300">Game Mode</label>
+              <div className="settings-group">
+                <div className="setting-item">
+                  <label className="form-label">Game Mode</label>
                   <select 
                     value={gameMode} 
                     onChange={(e) => setGameMode(e.target.value)}
                     disabled={!isHost}
-                    className="w-full p-3 bg-stone-800/60 border border-orange-600 rounded-lg text-amber-100 focus:border-red-500 focus:outline-none transition-colors"
+                    className="select-input"
                   >
                     <option value="classic">Classic</option>
-                    <option value="speed">Speed Round</option>
-                    <option value="hardcore">Hardcore</option>
+                    <option value="wildwest">Wild West</option>
                   </select>
+                  {gameMode === 'wildwest' && (
+                    <div style={{ 
+                      marginTop: '0.5rem', 
+                      fontSize: '0.875rem', 
+                      color: '#fdba74',
+                      fontStyle: 'italic'
+                    }}>
+                      ⚡ Includes powerups and special abilities!
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium mb-3 text-orange-300">Timer Duration</label>
-                  <div className="space-y-2">
+                <div className="setting-item">
+                  <label className="form-label">Timer Duration</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     <input 
                       type="range" 
                       min="8" 
@@ -493,9 +718,9 @@ const ROBBERY = () => {
                       value={maxTime}
                       onChange={(e) => setMaxTime(parseInt(e.target.value))}
                       disabled={!isHost}
-                      className="w-full accent-red-500"
+                      className="range-input"
                     />
-                    <div className="text-red-300 font-bold text-lg">{maxTime} seconds</div>
+                    <div className="range-value">{maxTime} seconds</div>
                   </div>
                 </div>
               </div>
@@ -504,52 +729,45 @@ const ROBBERY = () => {
                 <button 
                   onClick={startGame}
                   disabled={players.length < 2}
-                  className="w-full mt-8 bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-stone-100 px-6 py-4 rounded-lg font-bold text-lg transition-all transform hover:scale-105 shadow-lg flex items-center justify-center gap-2"
+                  className="btn btn-primary"
+                  style={{ marginTop: '2rem' }}
                 >
-                  <Play className="w-5 h-5" />
+                  <Play className="icon" />
                   Start Heist
                 </button>
               )}
               {!isHost && (
-                <div className="mt-8 text-center text-orange-400">
+                <div className="waiting-message">
                   Waiting for host to start the game...
                 </div>
               )}
             </div>
 
             {/* Chat Panel */}
-            <div className="bg-stone-900/80 backdrop-blur-lg border border-orange-700 rounded-lg p-6 shadow-2xl">
-              <h2 className="text-2xl font-bold mb-6 flex items-center gap-2 text-red-200">
-                <MessageCircle className="w-6 h-6" />
+            <div className="game-card">
+              <h2 className="card-header">
+                <MessageCircle className="icon-lg" />
                 Chat
               </h2>
-              <div className="flex flex-col h-80">
-                <div className="flex-1 overflow-y-auto space-y-2 mb-4">
+              <div className="chat-container">
+                <div className="chat-messages">
                   {chatMessages.map((msg, index) => (
-                    <div key={index} className={`p-2 rounded text-sm ${
-                      msg.type === 'error' ? 'bg-red-900/40 text-red-300' :
-                      msg.type === 'success' ? 'bg-green-900/40 text-green-300' :
-                      msg.type === 'system' ? 'bg-blue-900/40 text-blue-300' :
-                      'bg-stone-800/60 text-orange-300'
-                    }`}>
-                      {msg.playerName && <span className="font-bold">{msg.playerName}: </span>}
+                    <div key={index} className={`chat-message ${msg.type}`}>
+                      {msg.playerName && <span style={{ fontWeight: 'bold' }}>{msg.playerName}: </span>}
                       {msg.message}
                     </div>
                   ))}
                 </div>
-                <div className="flex gap-2">
+                <div className="chat-input-container">
                   <input
                     type="text"
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     onKeyPress={handleChatKeyPress}
                     placeholder="Type a message..."
-                    className="flex-1 p-3 bg-stone-800/60 border border-orange-600 rounded-lg text-amber-100 placeholder-stone-400 focus:border-red-500 focus:outline-none transition-colors"
+                    className="chat-input"
                   />
-                  <button
-                    onClick={sendChatMessage}
-                    className="px-4 py-3 bg-red-700 hover:bg-red-600 text-stone-100 font-bold rounded-lg transition-all"
-                  >
+                  <button onClick={sendChatMessage} className="chat-send-btn">
                     Send
                   </button>
                 </div>
@@ -558,15 +776,15 @@ const ROBBERY = () => {
           </div>
 
           {/* Game Rules */}
-          <div className="max-w-4xl mx-auto mt-8 bg-stone-900/60 backdrop-blur-lg border border-orange-700 rounded-lg p-6">
-            <h3 className="text-xl font-bold mb-4 text-red-200">How to Play</h3>
-            <div className="grid md:grid-cols-2 gap-4 text-orange-300">
-              <div className="space-y-2">
+          <div className="game-rules">
+            <h3 className="rules-title">How to Play</h3>
+            <div className="rules-grid">
+              <div className="rules-column">
                 <p>• Create words containing the target letters</p>
                 <p>• Submit before the timer expires</p>
                 <p>• Longer words earn more points</p>
               </div>
-              <div className="space-y-2">
+              <div className="rules-column">
                 <p>• Cannot reuse words already played</p>
                 <p>• Wrong words or timeout = elimination</p>
                 <p>• Last player standing wins</p>
@@ -578,107 +796,77 @@ const ROBBERY = () => {
     );
   }
 
-  // Playing Screen with Gun Visuals and Shooting Animations
+  // Playing Screen
   if (gameState === 'playing') {
     const currentPlayerData = players[currentPlayer];
-    const isYourTurn = currentPlayerData?.id === playerId;
+    // Fix: Check if it's your turn by name as backup
+    const isYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
     const progress = (timeLeft / maxTime) * 100;
 
     return (
-      <div className="min-h-screen bg-gradient-to-br from-red-950 via-orange-900 to-amber-950 text-amber-100 relative overflow-hidden">
+      <div className="game-container">
         
-        {/* Simple Shooting Animation Effects */}
+        {/* Shooting Animation Effects */}
         {shootingAnimation && (
-          <div className="absolute inset-0 z-50 pointer-events-none">
-            
-            {/* CSS for screen shake */}
-            <style jsx>{`
-              @keyframes screenShake {
-                0%, 100% { transform: translateX(0) translateY(0); }
-                10% { transform: translateX(-5px) translateY(2px); }
-                20% { transform: translateX(5px) translateY(-2px); }
-                30% { transform: translateX(-3px) translateY(3px); }
-                40% { transform: translateX(3px) translateY(-3px); }
-                50% { transform: translateX(-2px) translateY(1px); }
-                60% { transform: translateX(2px) translateY(-1px); }
-                70% { transform: translateX(-1px) translateY(2px); }
-                80% { transform: translateX(1px) translateY(-2px); }
-                90% { transform: translateX(-1px) translateY(1px); }
-              }
-              .screen-shake {
-                animation: screenShake 0.6s ease-in-out;
-              }
-            `}</style>
-            
-            {/* Screen Flash */}
-            {screenFlash && (
-              <div className="absolute inset-0 bg-red-500/60 animate-pulse"></div>
-            )}
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 50, pointerEvents: 'none' }}>
+            {screenFlash && <div className="screen-flash"></div>}
           </div>
         )}
 
-        <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-20 left-20 w-32 h-32 bg-red-600 rounded-full blur-3xl"></div>
-          <div className="absolute bottom-20 right-20 w-40 h-40 bg-orange-600 rounded-full blur-3xl"></div>
+        <div className="game-background-effects">
+          <div className="bg-blob-1"></div>
+          <div className="bg-blob-2"></div>
         </div>
         
-        <div className={`relative z-10 min-h-screen flex flex-col ${shootingAnimation ? 'screen-shake' : ''}`}>
-          {/* Header with Progress Bar Timer */}
-          <div className="flex justify-between items-center p-6 bg-stone-900/80 backdrop-blur-lg border-b border-orange-700">
-            <div className="flex items-center gap-6">
-              <h1 className="text-3xl font-bold text-red-200">ROBBERY</h1>
-              <div className="bg-stone-800 border border-orange-600 px-4 py-2 rounded-lg">
-                <span className="text-orange-300">Round </span>
-                <span className="text-red-300 font-bold">{round}</span>
+        <div className={`playing-container ${shootingAnimation ? 'screen-shake' : ''}`}>
+          {/* Header */}
+          <div className="playing-header">
+            <div className="header-left-playing">
+              <h1 className="playing-title">ROBBERY</h1>
+              <div className="round-display">
+                <span className="round-label">Round </span>
+                <span className="round-number">{round}</span>
               </div>
               <button
                 onClick={() => setSoundEnabled(!soundEnabled)}
-                className="p-3 bg-stone-800 border border-orange-600 rounded-lg hover:bg-stone-700 transition-all"
+                className="sound-toggle"
               >
-                {soundEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+                {soundEnabled ? <Volume2 className="icon" /> : <VolumeX className="icon" />}
               </button>
             </div>
             
-            {/* Large Digital Timer */}
-            <div className={`text-4xl font-bold bg-stone-800 border-2 px-6 py-3 rounded-lg ${
-              timeLeft <= 3 ? 'border-red-500 text-red-400 animate-pulse shadow-red-500/50 shadow-lg' : 
-              timeLeft <= 5 ? 'border-orange-500 text-orange-400' :
-              'border-orange-600 text-red-200'
+            {/* Timer */}
+            <div className={`timer-display ${
+              timeLeft <= 3 ? 'critical' : 
+              timeLeft <= 5 ? 'warning' : ''
             }`}>
               {timeLeft.toString().padStart(2, '0')}
             </div>
           </div>
 
-          {/* Progress Bar - Smooth */}
-          <div className="w-full h-3 bg-stone-800 overflow-hidden">
+          {/* Progress Bar */}
+          <div className="progress-bar">
             <div 
-              className={`h-full transition-all duration-1000 ease-linear transform origin-left ${
-                timeLeft <= 3 ? 'bg-red-500' : 
-                timeLeft <= 5 ? 'bg-orange-500' : 
-                'bg-green-500'
+              className={`progress-fill ${
+                timeLeft <= 3 ? 'critical' : 
+                timeLeft <= 5 ? 'warning' : 
+                'normal'
               }`}
-              style={{ 
-                transform: `scaleX(${progress / 100})`,
-                filter: timeLeft <= 3 ? 'drop-shadow(0 0 8px rgba(239, 68, 68, 0.8))' : 'none'
-              }}
+              style={{ transform: `scaleX(${progress / 100})` }}
             ></div>
           </div>
 
           {/* Game Area */}
-          <div className="flex-1 flex items-center justify-center p-8">
-            <div className="relative w-96 h-96">
+          <div className="game-area">
+            <div className="game-circle">
               {/* Central Target Area */}
-              <div className={`absolute inset-16 bg-red-800/20 backdrop-blur-lg border-4 border-red-600 rounded-full flex flex-col items-center justify-center shadow-2xl ${
-                timeLeft <= 3 ? 'animate-pulse border-red-400' : ''
-              }`}>
-                <div className="text-5xl font-bold text-red-200 mb-2">
-                  {target}
-                </div>
-                <div className="w-12 h-1 bg-red-500 rounded"></div>
-                <div className="text-sm text-red-300 mt-2 font-bold">TARGET</div>
+              <div className={`target-area ${timeLeft <= 3 ? 'critical' : ''}`}>
+                <div className="target-text">{target}</div>
+                <div className="target-divider"></div>
+                <div className="target-label">TARGET</div>
               </div>
 
-              {/* Players arranged in circle with simple guns */}
+              {/* Players arranged in circle */}
               {players.map((player, index) => {
                 const angle = (index * 360) / players.length;
                 const radius = 180;
@@ -690,47 +878,43 @@ const ROBBERY = () => {
                 return (
                   <div
                     key={player.id}
-                    className={`absolute w-24 h-24 rounded-lg border-2 flex flex-col items-center justify-center text-xs transition-all ${
-                      isActive ? 'bg-red-600/30 border-red-400 shadow-lg scale-110 animate-pulse' : 
-                      player.lives <= 0 ? 'bg-stone-800/40 border-stone-600 opacity-50 grayscale' :
-                      player.isBot ? 'bg-blue-800/40 border-blue-600' :
-                      'bg-stone-800/60 border-orange-600'
-                    } ${isBeingShot ? 'animate-bounce' : ''}`}
+                    className={`player-position ${
+                      isActive ? 'active' : 
+                      player.lives <= 0 ? 'eliminated' :
+                      player.isBot ? 'bot' : 'human'
+                    } ${isBeingShot ? 'being-shot' : ''}`}
                     style={{
-                      left: `calc(50% + ${x}px - 48px)`,
-                      top: `calc(50% + ${y}px - 48px)`
+                      left: `calc(50% + ${x}px - 3rem)`,
+                      top: `calc(50% + ${y}px - 3rem)`
                     }}
                   >
-                    {/* Simple Gun Icon */}
-                    <div className="absolute -top-2 -right-2 text-lg">
-                      🔫
-                    </div>
+                    {/* Gun Icon */}
+                    <div className="player-gun">🔫</div>
                     
                     {/* Player avatar */}
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-stone-100 font-bold text-sm mb-1 transition-all ${
-                      player.isBot ? 'bg-blue-700' : 'bg-red-700'
-                    } ${isBeingShot ? 'animate-pulse bg-red-900' : ''}`}>
-                      {player.isBot ? <Bot className="w-5 h-5" /> : player.name.charAt(0)}
+                    <div className={`player-position-avatar ${
+                      player.isBot ? 'bot' : 'human'
+                    } ${isBeingShot ? 'being-shot' : ''}`}>
+                      {player.isBot ? <Bot className="icon" /> : player.name.charAt(0)}
                     </div>
                     
                     {/* Player name */}
-                    <div className="text-amber-100 text-center leading-tight font-medium">
+                    <div className="player-position-name">
                       {player.name.length > 8 ? player.name.substring(0, 8) + '...' : player.name}
                     </div>
                     
                     {/* Lives display */}
-                    <div className="flex gap-1 mt-1">
+                    <div className="player-position-lives">
                       {[...Array(Math.max(0, player.lives))].map((_, i) => (
-                        <div key={i} className={`w-2 h-2 bg-red-500 rounded-full ${isBeingShot ? 'animate-pulse' : ''}`}></div>
+                        <div key={i} className={`life-dot-small ${isBeingShot ? 'being-shot' : ''}`}></div>
                       ))}
-                      {/* Show X marks for lost lives */}
                       {[...Array(Math.max(0, 3 - player.lives))].map((_, i) => (
-                        <div key={`lost-${i}`} className="w-2 h-2 text-red-800 text-xs flex items-center justify-center">×</div>
+                        <div key={`lost-${i}`} className="life-lost">×</div>
                       ))}
                     </div>
                     
                     {/* Score */}
-                    <div className="text-amber-400 text-xs font-bold">{player.score}</div>
+                    <div className="player-position-score">{player.score}</div>
                   </div>
                 );
               })}
@@ -738,56 +922,162 @@ const ROBBERY = () => {
               {/* Turn indicator */}
               {players.length > 0 && (
                 <div
-                  className="absolute w-8 h-8 transition-transform duration-500"
+                  className="turn-indicator"
                   style={{
-                    left: 'calc(50% - 16px)',
-                    top: 'calc(50% - 80px)',
                     transform: `rotate(${(currentPlayer * 360) / players.length}deg)`
                   }}
                 >
-                  <div className="w-0 h-0 border-l-4 border-r-4 border-b-8 border-l-transparent border-r-transparent border-b-red-400"></div>
+                  <div className="turn-arrow"></div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Input Area */}
-          {isYourTurn && (
-            <div className="p-6 bg-stone-900/80 backdrop-blur-lg border-t border-orange-700">
-              <div className="max-w-lg mx-auto">
-                <p className="text-center text-orange-300 mb-4 text-lg">
-                  Your turn! Create a word containing: <span className="text-red-300 font-bold text-xl">{target}</span>
-                </p>
-                <div className="flex gap-4">
-                  <input
-                    ref={inputRef}
-                    type="text"
-                    value={currentWord}
-                    onChange={(e) => setCurrentWord(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    className="flex-1 p-4 bg-stone-800/60 border border-orange-600 rounded-lg text-amber-100 placeholder-stone-400 focus:border-red-500 focus:outline-none transition-colors text-lg"
-                    placeholder="Type your word..."
-                    autoFocus
-                  />
-                  <button
-                    onClick={() => submitWord(currentWord.trim())}
-                    disabled={!currentWord.trim()}
-                    className="px-8 py-4 bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-stone-100 font-bold rounded-lg transition-all transform hover:scale-105"
-                  >
-                    SUBMIT
-                  </button>
+          {/* Input Area - Always Visible */}
+          <div className="input-area">
+            <div className="input-container">
+              {/* Wild West Powerups */}
+              {gameMode === 'wildwest' && availablePowerups > 0 && isYourTurn && (
+                <div style={{ 
+                  textAlign: 'center',
+                  marginBottom: '1rem',
+                  padding: '1rem',
+                  background: 'rgba(184, 107, 49, 0.3)',
+                  border: '1px solid #d97706',
+                  borderRadius: '0.5rem'
+                }}>
+                  <div style={{ 
+                    color: '#fbbf24', 
+                    fontWeight: 'bold', 
+                    marginBottom: '0.5rem',
+                    fontSize: '1rem'
+                  }}>
+                    ⚡ Wild West Powerups ({availablePowerups}) ⚡
+                  </div>
+                  <div style={{ 
+                    display: 'flex', 
+                    gap: '0.5rem', 
+                    justifyContent: 'center',
+                    flexWrap: 'wrap'
+                  }}>
+                    <button
+                      onClick={() => usePowerup('extraTime')}
+                      className="btn btn-small"
+                      style={{ 
+                        background: '#059669', 
+                        color: 'white',
+                        minWidth: '100px'
+                      }}
+                    >
+                      ⏰ +5 Time
+                    </button>
+                    <button
+                      onClick={() => usePowerup('skipTurn')}
+                      className="btn btn-small"
+                      style={{ 
+                        background: '#7c3aed', 
+                        color: 'white',
+                        minWidth: '100px'
+                      }}
+                    >
+                      ⏭️ Skip Bot
+                    </button>
+                    <button
+                      onClick={() => usePowerup('doublePoints')}
+                      className="btn btn-small"
+                      style={{ 
+                        background: '#dc2626', 
+                        color: 'white',
+                        minWidth: '100px'
+                      }}
+                    >
+                      💎 x2 Points
+                    </button>
+                    <button
+                      onClick={() => usePowerup('extraLife')}
+                      className="btn btn-small"
+                      style={{ 
+                        background: '#be185d', 
+                        color: 'white',
+                        minWidth: '100px'
+                      }}
+                    >
+                      ❤️ +1 Life
+                    </button>
+                  </div>
                 </div>
+              )}
+              
+              <p className="turn-instruction">
+                {isYourTurn ? (
+                  <>Your turn! Create a word containing: <span className="target-highlight">{target}</span></>
+                ) : (
+                  <>Waiting for {currentPlayerData?.name || 'player'}... Target: <span className="target-highlight">{target}</span></>
+                )}
+              </p>
+              
+              {/* Attempts Counter */}
+              {isYourTurn && (
+                <div style={{ 
+                  textAlign: 'center', 
+                  margin: '0.5rem 0',
+                  color: attemptsLeft <= 2 ? '#f87171' : '#fbbf24',
+                  fontWeight: 'bold'
+                }}>
+                  Attempts remaining: {attemptsLeft}/5
+                </div>
+              )}
+              
+              {/* Validation Message */}
+              {wordValidationMessage && (
+                <div style={{ 
+                  textAlign: 'center', 
+                  margin: '0.5rem 0',
+                  padding: '0.5rem',
+                  borderRadius: '0.5rem',
+                  background: wordValidationMessage.includes('valid') || wordValidationMessage.includes('attempts') || wordValidationMessage.includes('contain') || wordValidationMessage.includes('used') ? 
+                    'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.2)',
+                  color: wordValidationMessage.includes('valid') || wordValidationMessage.includes('attempts') || wordValidationMessage.includes('contain') || wordValidationMessage.includes('used') ? 
+                    '#fca5a5' : '#86efac',
+                  fontWeight: 'bold'
+                }}>
+                  {wordValidationMessage}
+                </div>
+              )}
+              
+              <div className="input-row">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={currentWord}
+                  onChange={(e) => setCurrentWord(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && currentWord.trim() && gameState === 'playing' && isYourTurn && !isValidatingWord) {
+                      submitWord(currentWord.trim());
+                    }
+                  }}
+                  className="word-input"
+                  placeholder={isYourTurn ? (isValidatingWord ? "Validating..." : "Type your word...") : "Not your turn..."}
+                  disabled={!isYourTurn || isValidatingWord}
+                />
+                <button
+                  onClick={() => submitWord(currentWord.trim())}
+                  disabled={!currentWord.trim() || !isYourTurn || isValidatingWord}
+                  className="submit-btn"
+                >
+                  {isValidatingWord ? 'CHECKING...' : 'SUBMIT'}
+                </button>
               </div>
             </div>
-          )}
+          </div>
 
           {/* Used Words */}
-          <div className="p-4 bg-stone-900/60 backdrop-blur-lg border-t border-orange-700">
-            <div className="max-w-4xl mx-auto">
-              <h4 className="font-bold mb-3 text-red-200 text-center">Used Words</h4>
-              <div className="flex flex-wrap justify-center gap-2">
+          <div className="used-words-area">
+            <div className="used-words-container">
+              <h4 className="used-words-title">Used Words</h4>
+              <div className="used-words-list">
                 {Array.from(usedWords).slice(-15).map(word => (
-                  <span key={word} className="bg-stone-700 px-3 py-1 rounded text-amber-100 text-sm border border-orange-600">
+                  <span key={word} className="used-word">
                     {word.toUpperCase()}
                   </span>
                 ))}
@@ -806,53 +1096,49 @@ const ROBBERY = () => {
     );
 
     return (
-      <div className="min-h-screen bg-gradient-to-br from-red-950 via-orange-900 to-amber-950 text-amber-100 flex items-center justify-center relative overflow-hidden">
-        <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-20 left-20 w-32 h-32 bg-red-600 rounded-full blur-3xl"></div>
-          <div className="absolute bottom-20 right-20 w-40 h-40 bg-orange-600 rounded-full blur-3xl"></div>
+      <div className="game-container game-over-container">
+        <div className="game-background-effects">
+          <div className="bg-blob-1"></div>
+          <div className="bg-blob-2"></div>
         </div>
         
-        <div className="relative z-10 text-center max-w-lg mx-auto p-8">
-          <div className="bg-stone-900/80 backdrop-blur-lg border border-orange-700 rounded-lg p-8 shadow-2xl">
-            <div className="text-6xl mb-6">💰</div>
-            <h1 className="text-4xl font-bold mb-4 text-red-200">
-              Heist Complete
-            </h1>
-            <div className="text-2xl mb-6 text-red-300 font-bold">
-              Winner: {winner.name}
-            </div>
-            <div className="text-lg mb-6 text-amber-300">
-              Score: {winner.score} points
-            </div>
+        <div className="game-over-content">
+          <div className="game-over-card">
+            <div className="game-over-icon">💰</div>
+            <h1 className="game-over-title">Heist Complete</h1>
+            <div className="winner-name">Winner: {winner.name}</div>
+            <div className="winner-score">Score: {winner.score} points</div>
             
-            <div className="bg-stone-800/60 border border-orange-600 rounded-lg p-6 mb-6">
-              <h3 className="text-xl font-bold mb-4 text-red-200">Final Scores</h3>
-              <div className="space-y-3">
+            <div className="final-scores">
+              <h3 className="final-scores-title">Final Scores</h3>
+              <div className="score-list">
                 {players.sort((a, b) => b.score - a.score).map((player, index) => (
-                  <div key={player.id} className="flex justify-between items-center p-3 bg-stone-700/40 rounded border border-orange-600">
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg">{index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '🏅'}</span>
-                      <div className="flex items-center gap-2">
-                        {player.isBot && <Bot className="w-4 h-4 text-blue-400" />}
-                        <span className="font-semibold text-amber-100">{player.name}</span>
+                  <div key={player.id} className="score-item">
+                    <div className="score-player">
+                      <span className="score-medal">
+                        {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '🏅'}
+                      </span>
+                      <div className="score-player-info">
+                        {player.isBot && <Bot className="icon" style={{ color: '#60a5fa' }} />}
+                        <span className="score-player-name">{player.name}</span>
                       </div>
                     </div>
-                    <span className="font-bold text-amber-300">{player.score} pts</span>
+                    <span className="score-points">{player.score} pts</span>
                   </div>
                 ))}
               </div>
             </div>
 
-            <div className="space-y-3">
+            <div className="game-over-actions">
               <button 
                 onClick={() => setGameState('lobby')}
-                className="w-full px-6 py-3 bg-red-700 hover:bg-red-600 text-stone-100 font-bold rounded-lg transition-all"
+                className="btn btn-primary"
               >
                 Play Again
               </button>
               <button 
                 onClick={leaveParty}
-                className="w-full px-6 py-3 bg-stone-700 hover:bg-stone-600 text-amber-100 font-bold rounded-lg transition-all"
+                className="btn btn-outline"
               >
                 Exit Game
               </button>
