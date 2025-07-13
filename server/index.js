@@ -202,20 +202,34 @@ io.on('connection', (socket) => {
     
     if (!game || game.host !== socket.id) return;
 
+    // Clear any existing timer first
+    if (game.timerId) {
+      clearInterval(game.timerId);
+      game.timerId = null;
+    }
+
+    // Reset ALL game state completely
     game.gameState = 'playing';
     game.target = getRandomTarget();
     game.currentPlayer = 0;
     game.usedWords = []; // Reset as empty array
+    game.round = 1; // Reset round counter
+    game.timeLeft = game.maxTime; // Reset timer
     
-    // Clear all typing states when game starts
+    // Reset all player stats for new game - VERY IMPORTANT
     game.players.forEach(player => {
-      player.currentlyTyping = '';
+      player.lives = 3;           // Reset lives to 3
+      player.score = 0;           // Reset score to 0
+      player.currentlyTyping = ''; // Clear typing state
     });
     
+    // Send updated game state FIRST
     io.to(partyCode).emit('gameStateUpdate', game);
     
-    // Start timer
-    startGameTimer(partyCode);
+    // Small delay to ensure state is updated before starting timer
+    setTimeout(() => {
+      startGameTimer(partyCode);
+    }, 100);
   });
 
   // Submit word with validation
@@ -345,6 +359,20 @@ function startGameTimer(partyCode) {
   const game = games.get(partyCode);
   if (!game || game.gameState !== 'playing') return;
 
+  // Clear any existing timer first
+  if (game.timerId) {
+    clearInterval(game.timerId);
+  }
+
+  // Make sure we have alive players before starting
+  const alivePlayers = game.players.filter(p => p.lives > 0);
+  if (alivePlayers.length <= 1) {
+    console.log('Not enough alive players to start timer');
+    return;
+  }
+
+  console.log(`Starting timer for party ${partyCode}, time: ${game.timeLeft}`);
+
   const timer = setInterval(() => {
     game.timeLeft--;
     
@@ -353,20 +381,22 @@ function startGameTimer(partyCode) {
       
       // Current player loses a life
       const currentPlayer = game.players[game.currentPlayer];
-      currentPlayer.lives--;
-      
-      // Clear typing state
-      currentPlayer.currentlyTyping = '';
-      io.to(partyCode).emit('playerTypingUpdate', {
-        playerId: currentPlayer.id,
-        word: ''
-      });
-      
-      io.to(partyCode).emit('playerEliminated', currentPlayer.id);
-      
-      setTimeout(() => {
-        nextTurn(partyCode);
-      }, 1000);
+      if (currentPlayer) {
+        currentPlayer.lives--;
+        
+        // Clear typing state
+        currentPlayer.currentlyTyping = '';
+        io.to(partyCode).emit('playerTypingUpdate', {
+          playerId: currentPlayer.id,
+          word: ''
+        });
+        
+        io.to(partyCode).emit('playerEliminated', currentPlayer.id);
+        
+        setTimeout(() => {
+          nextTurn(partyCode);
+        }, 1000);
+      }
     } else {
       io.to(partyCode).emit('timerUpdate', game.timeLeft);
     }
@@ -379,23 +409,40 @@ function nextTurn(partyCode) {
   const game = games.get(partyCode);
   if (!game) return;
 
+  console.log(`Next turn called for party ${partyCode}`);
+
   // Clear existing timer
   if (game.timerId) {
     clearInterval(game.timerId);
   }
 
-  // Check for game end
+  // Check for game end - but only count human players and bots with lives > 0
   const alivePlayers = game.players.filter(p => p.lives > 0);
+  console.log(`Alive players: ${alivePlayers.length}`, alivePlayers.map(p => `${p.name}:${p.lives}`));
+  
   if (alivePlayers.length <= 1) {
+    console.log('Game ending - not enough alive players');
     game.gameState = 'finished';
     io.to(partyCode).emit('gameStateUpdate', game);
     return;
   }
 
   // Find next alive player
+  let attempts = 0;
   let nextPlayer = (game.currentPlayer + 1) % game.players.length;
-  while (game.players[nextPlayer].lives <= 0) {
+  
+  // Safety check to prevent infinite loop
+  while (game.players[nextPlayer].lives <= 0 && attempts < game.players.length) {
     nextPlayer = (nextPlayer + 1) % game.players.length;
+    attempts++;
+  }
+
+  // If we couldn't find an alive player, end the game
+  if (attempts >= game.players.length || game.players[nextPlayer].lives <= 0) {
+    console.log('Could not find alive player, ending game');
+    game.gameState = 'finished';
+    io.to(partyCode).emit('gameStateUpdate', game);
+    return;
   }
 
   game.currentPlayer = nextPlayer;
@@ -406,6 +453,8 @@ function nextTurn(partyCode) {
   game.players.forEach(player => {
     player.currentlyTyping = '';
   });
+
+  console.log(`Next player: ${game.players[nextPlayer].name}, target: ${game.target}`);
 
   io.to(partyCode).emit('gameStateUpdate', game);
   
