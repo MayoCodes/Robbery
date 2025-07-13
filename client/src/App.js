@@ -175,51 +175,61 @@ const ROBBERY = () => {
     };
   }, []);
 
-  // Auto-focus input when it becomes your turn - IMPROVED
+  // Auto-capture typing when it's your turn
   useEffect(() => {
     if (gameState === 'playing') {
-      const currentPlayerData = players[currentPlayer];
-      const isYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
-      
-      if (isYourTurn && inputRef.current && !isValidatingWord) {
-        console.log('Attempting to focus input for player turn');
+      const handleKeyDown = (e) => {
+        const currentPlayerData = players[currentPlayer];
+        const isYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
         
-        // Multiple focus attempts with increasing delays to ensure it works
-        const focusInput = () => {
-          if (inputRef.current && !inputRef.current.disabled) {
+        // Only capture if it's your turn and not validating
+        if (!isYourTurn || isValidatingWord) return;
+        
+        // Don't capture if user is typing in chat or another input
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        
+        // Handle different key types
+        if (/^[a-zA-Z]$/.test(e.key)) {
+          // Letter keys - add to word
+          e.preventDefault();
+          const newWord = currentWord + e.key.toLowerCase();
+          setCurrentWord(newWord);
+          
+          // Focus input and emit typing update
+          if (inputRef.current) {
             inputRef.current.focus();
-            inputRef.current.select(); // Also select any existing text
-            console.log('Input focused successfully');
           }
-        };
-        
-        // Immediate focus
-        focusInput();
-        
-        // Backup focuses in case the first one fails
-        setTimeout(focusInput, 50);
-        setTimeout(focusInput, 150);
-        setTimeout(focusInput, 300);
-      }
-    }
-  }, [currentPlayer, gameState, players, playerId, playerName, isValidatingWord]);
+          if (socket) {
+            socket.emit('typingUpdate', { word: newWord });
+          }
+        } else if (e.key === 'Backspace' && currentWord.length > 0) {
+          // Backspace - remove last character
+          e.preventDefault();
+          const newWord = currentWord.slice(0, -1);
+          setCurrentWord(newWord);
+          
+          if (inputRef.current) {
+            inputRef.current.focus();
+          }
+          if (socket) {
+            socket.emit('typingUpdate', { word: newWord });
+          }
+        } else if (e.key === 'Enter' && currentWord.trim()) {
+          // Enter - submit word
+          e.preventDefault();
+          submitWord(currentWord.trim());
+        }
+      };
 
-  // Additional effect to focus when game state changes to playing
-  useEffect(() => {
-    if (gameState === 'playing' && inputRef.current) {
-      const currentPlayerData = players[currentPlayer];
-      const isYourTurn = currentPlayerData?.id === playerId || currentPlayerData?.name === playerName;
+      // Add event listener to document
+      document.addEventListener('keydown', handleKeyDown);
       
-      if (isYourTurn) {
-        setTimeout(() => {
-          if (inputRef.current && !inputRef.current.disabled) {
-            inputRef.current.focus();
-            console.log('Game started - input focused');
-          }
-        }, 500);
-      }
+      // Cleanup
+      return () => {
+        document.removeEventListener('keydown', handleKeyDown);
+      };
     }
-  }, [gameState]);
+  }, [gameState, currentPlayer, players, playerId, playerName, isValidatingWord, socket, currentWord, submitWord]);
 
   // IMPROVED: Audio initialization with user interaction handling
   const initializeAudio = () => {
@@ -1215,21 +1225,9 @@ const ROBBERY = () => {
                       submitWord(currentWord.trim());
                     }
                   }}
-                  onFocus={() => console.log('Input focused by user')}
-                  onClick={() => {
-                    // Ensure focus when clicked
-                    if (inputRef.current) {
-                      inputRef.current.focus();
-                    }
-                  }}
                   className="word-input"
                   placeholder={isYourTurn ? (isValidatingWord ? "Validating..." : "Type your word...") : "Not your turn..."}
                   disabled={!isYourTurn || isValidatingWord}
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  spellCheck="false"
-                  tabIndex={isYourTurn ? 0 : -1}
                 />
                 <button
                   onClick={() => submitWord(currentWord.trim())}
