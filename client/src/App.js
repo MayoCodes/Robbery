@@ -41,7 +41,7 @@ const ROBBERY = () => {
     const newSocket = io(
       process.env.REACT_APP_SOCKET_URL || 
       (process.env.NODE_ENV === 'production' 
-        ? 'https://robbery-server-xqzx.onrender.com'  // Use your actual Render URL
+        ? 'https://robbery.onrender.com'  // Use your actual Render URL
         : 'http://localhost:3001'),
       {
         transports: ['websocket', 'polling'],
