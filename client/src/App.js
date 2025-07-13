@@ -38,10 +38,16 @@ const ROBBERY = () => {
 
   // Socket.IO connection
   useEffect(() => {
-    const newSocket = io(process.env.NODE_ENV === 'production' 
-      ? 'https://your-vercel-backend-url.vercel.app' 
-      : 'http://localhost:3001'
-    );
+    const newSocket = io(
+  process.env.REACT_APP_SOCKET_URL || 
+  (process.env.NODE_ENV === 'production' 
+    ? 'https://your-server-name.onrender.com'  // You'll update this after Render deployment
+    : 'http://localhost:3001'),
+  {
+    transports: ['websocket', 'polling'],
+    timeout: 20000,
+  }
+);
     
     setSocket(newSocket);
     setPlayerId(newSocket.id);

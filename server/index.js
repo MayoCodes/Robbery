@@ -6,15 +6,48 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
+// Updated CORS for production deployment
 const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: [
+      "http://localhost:3000",
+      "https://*.vercel.app", // Allows any Vercel subdomain
+      // You can update this with your specific domain after deployment:
+      // "https://your-project-name.vercel.app"
+    ],
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    "http://localhost:3000",
+    "https://*.vercel.app"
+  ],
+  credentials: true
+}));
+
 app.use(express.json());
+
+// Health check endpoint for Render
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    games: games.size,
+    players: playerSockets.size
+  });
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'ROBBERY Game Server is running!',
+    games: games.size,
+    players: playerSockets.size
+  });
+});
 
 // Game state storage
 const games = new Map();
@@ -345,6 +378,7 @@ function handleBotTurn(partyCode) {
 }
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
